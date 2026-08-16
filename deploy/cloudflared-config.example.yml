@@ -1,0 +1,10 @@
+tunnel: YOUR_TUNNEL_UUID
+credentials-file: /home/YOUR_USER/.cloudflared/YOUR_TUNNEL_UUID.json
+
+ingress:
+  - hostname: voice.example.com
+    service: http://127.0.0.1:8502
+    originRequest:
+      connectTimeout: 30s
+      noHappyEyeballs: true
+  - service: http_status:404

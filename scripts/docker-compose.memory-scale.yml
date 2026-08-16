@@ -1,0 +1,20 @@
+services:
+  voice-server:
+    image: lmca-share-voice-server:latest
+    container_name: lmca-memory-scale-voice
+    ports: !override
+      - "127.0.0.1:8503:8502"
+    environment:
+      - DB_PATH=/app/tmp/memory-scale/voice.db
+      - ENABLE_LONG_TERM_MEMORY=${ENABLE_LONG_TERM_MEMORY:-true}
+      - ENABLE_LONG_TERM_MEMORY_WRITES=false
+      - ENABLE_TURN_INSIGHT=true
+    volumes:
+      - ./voice_server.py:/app/voice_server.py:ro
+
+  memobase-server-api:
+    image: lmca-share-memobase-server-api:latest
+    volumes:
+      - ./scripts:/benchmark-scripts:ro
+      - ./vendor/memobase/src/server/api/memobase_server:/app/memobase_server:ro
+      - ./tmp/memory-scale/tiktoken-cache:/tmp/data-gym-cache:ro

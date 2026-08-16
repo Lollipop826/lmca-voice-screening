@@ -1,0 +1,22 @@
+# ECS API-only runtime dependencies for voice_server.py
+# Uses cloud ASR/TTS/LLM APIs, no local LLM, no Chroma/local embedding stack.
+
+fastapi>=0.111.0,<1.0.0
+uvicorn[standard]>=0.30.0,<1.0.0
+python-dotenv>=1.0.1,<2.0.0
+pydantic>=2.7.0,<3.0.0
+
+numpy>=1.26.0,<3.0.0
+soundfile>=0.12.1,<1.0.0
+onnxruntime>=1.18.0,<2.0.0
+kaldi-native-fbank>=1.22.0,<2.0.0
+aiortc>=1.9.0,<2.0.0
+websockets>=12.0,<17.0
+requests>=2.31.0,<3.0.0
+httpx>=0.27.0,<1.0.0
+
+langchain-core>=0.2.43,<1.0.0
+langchain-openai>=0.1.22,<1.0.0
+openai>=1.30.0,<3.0.0
+pypinyin>=0.55.0,<1.0.0
+memobase @ git+https://github.com/memodb-io/memobase.git@v0.0.42

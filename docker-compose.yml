@@ -1,0 +1,104 @@
+services:
+  voice-server:
+    build: .
+    container_name: voice-dialogue
+    ports:
+      - "8502:8502"
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./tmp:/app/tmp
+      - ./data:/app/data
+      - ./src:/app/src:ro
+      - ./static:/app/static
+      - ./models/wespeaker-cnceleb:/app/models/wespeaker-cnceleb:ro
+      - ./models/eres2netv2-cn:/app/models/eres2netv2-cn:ro
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
+      - PYTHONUNBUFFERED=1
+      - ANSWER_COMPLETION_OBSERVATION_WINDOW_S=0
+      - DEFAULT_SESSION_MODE=${DEFAULT_SESSION_MODE:-wellbeing}
+      - ENABLE_COGNITIVE_SCREENING=${ENABLE_COGNITIVE_SCREENING:-true}
+      - ENABLE_TURN_INSIGHT=${ENABLE_TURN_INSIGHT:-true}
+      - ENABLE_LONG_TERM_MEMORY=${ENABLE_LONG_TERM_MEMORY:-true}
+      - ENABLE_LONG_TERM_MEMORY_WRITES=${ENABLE_LONG_TERM_MEMORY_WRITES:-true}
+      - ENABLE_PATIENT_MEMORY_DELETE=${ENABLE_PATIENT_MEMORY_DELETE:-true}
+      - ENABLE_DEMO_DATA=${ENABLE_DEMO_DATA:-false}
+      - MEMOBASE_PROJECT_URL=http://memobase-server-api:8000
+      - MEMOBASE_API_KEY=${MEMOBASE_API_KEY}
+      - USE_MODELSCOPE=true
+      - EMOTION_USE_GPU=false
+      - EMOTION2VEC_MODEL=/app/data/modelscope/models/iic/emotion2vec_plus_large
+      - MODELSCOPE_CACHE=/app/data/modelscope
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8502/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  memobase-server-db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${DATABASE_USER}
+      - POSTGRES_PASSWORD=${DATABASE_PASSWORD}
+      - POSTGRES_DB=${DATABASE_NAME}
+    ports:
+      - "127.0.0.1:${DATABASE_EXPORT_PORT}:5432"
+    volumes:
+      - ${DATABASE_LOCATION}:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER} -d ${DATABASE_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  memobase-server-redis:
+    image: redis:7.4
+    restart: unless-stopped
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    ports:
+      - "127.0.0.1:${REDIS_EXPORT_PORT}:6379"
+    volumes:
+      - ${REDIS_LOCATION}:/data
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  memobase-server-api:
+    platform: linux/amd64
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql://${DATABASE_USER}:${DATABASE_PASSWORD}@memobase-server-db:5432/${DATABASE_NAME}
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@memobase-server-redis:6379/0
+      - ACCESS_TOKEN=${ACCESS_TOKEN}
+      - PROJECT_ID=${PROJECT_ID}
+      - API_HOSTS=${API_HOSTS}
+      - USE_CORS=${USE_CORS}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      memobase-server-db:
+        condition: service_healthy
+      memobase-server-redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${API_EXPORT_PORT}:8000"
+    build:
+      context: ./vendor/memobase/src/server/api
+    volumes:
+      - ./vendor/memobase/src/server/api/config.yaml:/app/config.yaml:ro
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export MEMOBASE_LLM_API_KEY="$$SILICONFLOW_API_KEY"
+        export MEMOBASE_EMBEDDING_API_KEY="$$SILICONFLOW_API_KEY"
+        exec /app/.venv/bin/uvicorn api:app --host 0.0.0.0 --port 8000

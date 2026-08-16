@@ -1,0 +1,120 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+
+# Virtualenv / local env
+venv/
+.venv/
+ENV/
+env/
+
+# Secrets
+.env
+.env.storage
+.env.cloudflare
+
+# OS / IDE
+.DS_Store
+.vscode/
+
+# Runtime / logs
+.run_logs/
+logs/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Large artifacts / downloads
+*.whl
+*.pt
+*.pth
+*.bin
+*.onnx
+*.ckpt
+
+# Local model/data directories (very large)
+models/
+data/
+kb/
+
+# Vendored/third-party source drops (optional; keep repo lean)
+PaddleSpeech/
+Paddle-3.2.0/
+ZipVoice-master/
+
+# Vector DB / cache (keep KB sources, ignore generated index if present)
+kb/.chroma_semantic/
+kb/**/.chroma*/
+
+# Misc
+~/
+
+# Backups / editor artifacts
+*.bak
+*_backup.*
+
+# Demo audio assets (local only)
+static/audio/
+
+# ── Local environments / large dirs (never commit) ──
+luyang/
+build/
+dist/
+te/
+tmp/
+.backups/
+remote_backups/
+delivery/
+*.egg-info/
+
+# Downloaded model/binary wheels
+*.whl
+
+# Frontend dependencies
+**/node_modules/
+
+# Generated root output
+output/
+
+# Agent / tooling local state
+.agents/
+.impeccable/
+skills-lock.json
+.planning/
+.playwright-cli/
+.playwright-mcp/
+outputs/
+voice-session-audio-verified.png
+
+# HTML/UI one-off rewrite scripts (local only)
+extract_html.py
+parse_dom.py
+patch_layout.py
+fix_scroll.py
+restore_ui.py
+rewrite_all.py
+rewrite_layout.py
+rewrite_ui.py
+
+# Ad-hoc test/debug scripts and artifacts at repo root
+/test_ark_asr.py
+/test_ark_tts.py
+/test_cache.py
+/test_context_cache.py
+/test_control.py
+/test_drawing_server.py
+/test_drawing_vlm.py
+/test_vision_ark.py
+/test_drawing_*.png
+
+# Editor backups
+*.bak.*
+static/*.bak.*

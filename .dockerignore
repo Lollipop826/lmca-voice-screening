@@ -1,0 +1,47 @@
+# Virtual environments
+luyang/
+venv/
+.venv/
+
+# 本地大模型和框架（API-only 模式不需要）
+models/
+Paddle-3.2.0/
+PaddleSpeech/
+ZipVoice-master/
+build/
+dist/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Temp files
+tmp/
+.run_logs/
+__pycache__/
+*.pyc
+*.pyo
+
+# Old wheel files
+*.whl
+
+# Models (mounted as volume)
+models/
+
+# The VAD model is copied into the image; other models remain excluded.
+!models/
+models/*
+!models/silero_vad.onnx
+
+# Backups
+.backups/
+
+# OS files
+.DS_Store
+~/*
+te/

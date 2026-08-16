@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>陪伴记录 · 心理健康陪伴</title>
+    <link rel="stylesheet" href="/static/vendor/fontawesome/css/all.min.css">
+    <style>
+        :root {
+            --bg: #f4f7fb;
+            --surface: #ffffff;
+            --surface-soft: #f8fafc;
+            --line: #dbe4ee;
+            --line-strong: #c8d4e2;
+            --text: #172033;
+            --muted: #65748b;
+            --primary: #0f766e;
+            --primary-dark: #115e59;
+            --primary-soft: #e5f4f2;
+            --blue: #2563eb;
+            --blue-soft: #eaf1ff;
+            --amber: #b45309;
+            --amber-soft: #fff4df;
+            --danger: #b91c1c;
+            --danger-soft: #fff1f2;
+            --ok: #15803d;
+            --ok-soft: #eaf7ee;
+            --shadow: 0 12px 34px rgba(15, 23, 42, 0.08);
+            --radius: 8px;
+        }
+
+        * { box-sizing: border-box; }
+        html, body { margin: 0; min-height: 100%; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+            color: var(--text);
+            background: var(--bg);
+            letter-spacing: 0;
+        }
+        button, input, select { font: inherit; letter-spacing: 0; }
+        button { cursor: pointer; }
+        a { color: inherit; text-decoration: none; }
+
+        .app-shell { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
+        .topbar {
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 0 24px;
+            background: var(--surface);
+            border-bottom: 1px solid var(--line);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .brand { display: flex; align-items: center; gap: 12px; min-width: 220px; }
+        .brand-mark {
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--primary-soft);
+            color: var(--primary-dark);
+            border: 1px solid rgba(15, 118, 110, 0.18);
+        }
+        .brand-title { font-size: 18px; font-weight: 750; line-height: 1.2; }
+        .brand-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+        .topbar-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+        .user-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            height: 36px;
+            max-width: 220px;
+            padding: 0 12px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: var(--surface-soft);
+            color: var(--primary-dark);
+            font-size: 13px;
+            font-weight: 700;
+        }
+        .user-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .btn {
+            height: 36px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: var(--surface);
+            color: var(--text);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 0 12px;
+            font-size: 13px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+        .btn:hover { border-color: var(--line-strong); background: var(--surface-soft); }
+        .btn.primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+        .btn.primary:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+        .btn.danger { color: var(--danger); border-color: #fecaca; background: #fff; }
+        .btn.icon { width: 36px; padding: 0; }
+        .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+        .layout {
+            display: grid;
+            grid-template-columns: minmax(360px, 440px) minmax(0, 1fr);
+            gap: 16px;
+            padding: 16px;
+            height: calc(100vh - 64px);
+        }
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            min-height: 0;
+        }
+        .list-panel, .detail-panel { display: flex; flex-direction: column; overflow: hidden; }
+        .panel-header {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--line);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .panel-title { font-size: 15px; font-weight: 800; }
+        .panel-meta { font-size: 12px; color: var(--muted); }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--line);
+            background: var(--surface-soft);
+        }
+        .stat {
+            min-width: 0;
+            padding: 10px;
+            background: var(--surface);
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+        }
+        .stat-label { color: var(--muted); font-size: 12px; }
+        .stat-value { margin-top: 5px; font-size: 20px; font-weight: 800; line-height: 1; }
+
+        .filters {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--line);
+            display: grid;
+            gap: 10px;
+        }
+        .search-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+        .control-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .input, .select {
+            width: 100%;
+            height: 38px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            padding: 0 11px;
+            background: #fff;
+            color: var(--text);
+            outline: none;
+            font-size: 14px;
+        }
+        .input:focus, .select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12); }
+
+        .session-list { overflow: auto; padding: 8px; min-height: 0; }
+        .session-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 10px;
+            padding: 12px;
+            border: 1px solid transparent;
+            border-radius: var(--radius);
+            background: transparent;
+            width: 100%;
+            text-align: left;
+            color: inherit;
+        }
+        .session-row:hover { background: var(--surface-soft); border-color: var(--line); }
+        .session-row.active { background: var(--primary-soft); border-color: rgba(15, 118, 110, 0.35); }
+        .session-main { min-width: 0; }
+        .session-name-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+        .session-name { font-size: 15px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .session-id { color: var(--muted); font-size: 11px; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .session-time { color: var(--muted); font-size: 12px; margin-top: 8px; display: flex; align-items: center; gap: 6px; }
+        .session-score { text-align: right; min-width: 64px; font-weight: 800; color: var(--primary-dark); }
+        .session-score small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; font-weight: 600; }
+        .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            height: 23px;
+            padding: 0 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+            background: var(--surface-soft);
+            color: var(--muted);
+            border: 1px solid var(--line);
+        }
+        .badge.ok { background: var(--ok-soft); color: var(--ok); border-color: #bbf7d0; }
+        .badge.warn { background: var(--amber-soft); color: var(--amber); border-color: #fed7aa; }
+        .badge.blue { background: var(--blue-soft); color: var(--blue); border-color: #bfdbfe; }
+
+        .detail-empty {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            color: var(--muted);
+            text-align: center;
+        }
+        .detail-empty i { font-size: 42px; color: #b8c4d4; margin-bottom: 12px; }
+        .detail-content { display: none; min-height: 0; flex: 1; flex-direction: column; }
+        .detail-content.open { display: flex; }
+        .detail-summary {
+            padding: 16px;
+            border-bottom: 1px solid var(--line);
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 14px;
+            align-items: start;
+        }
+        .detail-name { font-size: 22px; font-weight: 850; line-height: 1.2; }
+        .detail-sub { margin-top: 7px; color: var(--muted); font-size: 13px; display: flex; flex-wrap: wrap; gap: 12px; }
+        .detail-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+        .metric-strip {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--line);
+            background: var(--surface-soft);
+        }
+        .metric { padding: 10px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; min-width: 0; }
+        .metric .label { color: var(--muted); font-size: 12px; }
+        .metric .value { margin-top: 5px; font-size: 18px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .tabs { display: flex; border-bottom: 1px solid var(--line); background: #fff; }
+        .tab-btn {
+            height: 44px;
+            flex: 1;
+            border: 0;
+            border-bottom: 2px solid transparent;
+            background: #fff;
+            color: var(--muted);
+            font-weight: 800;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .tab-btn.active { color: var(--primary-dark); border-bottom-color: var(--primary); background: var(--surface-soft); }
+        .tab-btn[hidden] { display: none; }
+        .tab-content { display: none; overflow: auto; padding: 16px; min-height: 0; flex: 1; }
+        .tab-content.active { display: block; }
+
+        .timeline { display: flex; flex-direction: column; gap: 12px; }
+        .message {
+            display: grid;
+            grid-template-columns: 34px minmax(0, 1fr);
+            gap: 10px;
+            align-items: start;
+        }
+        .avatar {
+            width: 34px;
+            height: 34px;
+            border-radius: 999px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--blue-soft);
+            color: var(--blue);
+        }
+        .message.assistant .avatar { background: #f3e8ff; color: #7e22ce; }
+        .bubble { border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; background: #fff; }
+        .bubble-text { line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+        .bubble-meta { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+        .score-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+        .score-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; background: #fff; }
+        .score-card .dim { color: var(--muted); font-weight: 700; font-size: 13px; }
+        .score-card .score { margin-top: 8px; font-size: 26px; font-weight: 850; color: var(--primary-dark); }
+        .score-card .detail { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+        .audio-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+        .audio-list { display: flex; flex-direction: column; gap: 10px; }
+        .audio-row { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; background: #fff; }
+        .audio-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+        .audio-title { display: flex; align-items: center; gap: 8px; font-weight: 800; min-width: 0; }
+        .audio-text { color: var(--muted); line-height: 1.55; margin-top: 8px; font-size: 13px; }
+        .audio-row audio { width: 100%; height: 38px; }
+
+        .notice, .empty, .loading {
+            padding: 28px;
+            text-align: center;
+            color: var(--muted);
+        }
+        .notice.error { color: var(--danger); background: var(--danger-soft); border: 1px solid #fecaca; border-radius: var(--radius); margin: 16px; }
+        .loading i { margin-right: 8px; }
+
+        @media (max-width: 1100px) {
+            .layout { grid-template-columns: 1fr; height: auto; }
+            .list-panel { min-height: 520px; }
+            .detail-panel { min-height: 680px; }
+        }
+        @media (max-width: 720px) {
+            .topbar { height: auto; padding: 12px; align-items: flex-start; flex-direction: column; }
+            .brand { min-width: 0; }
+            .topbar-actions { width: 100%; justify-content: stretch; }
+            .topbar-actions .btn, .topbar-actions .user-chip { flex: 1 1 auto; }
+            .layout { padding: 10px; gap: 10px; }
+            .stats-grid, .metric-strip { grid-template-columns: 1fr 1fr; }
+            .detail-summary { grid-template-columns: 1fr; }
+            .detail-actions { justify-content: stretch; }
+            .detail-actions .btn { flex: 1 1 auto; }
+            .control-row { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <div class="brand">
+                <div class="brand-mark"><i class="fas fa-clock-rotate-left"></i></div>
+                <div>
+                    <div class="brand-title">陪伴记录</div>
+                    <div class="brand-subtitle">会话回顾、语音归档、认知专项分开查看</div>
+                </div>
+            </div>
+            <div class="topbar-actions">
+                <div id="auth-user-chip" class="user-chip"><i class="fas fa-user-shield"></i><span id="auth-user-name">加载中</span></div>
+                <a id="admin-link" href="/admin" class="btn"><i class="fas fa-shield-halved"></i>后台</a>
+                <button class="btn icon" onclick="refreshSessions()" title="刷新"><i class="fas fa-rotate-right"></i></button>
+                <a href="/" class="btn primary"><i class="fas fa-microphone-lines"></i>返回陪伴</a>
+                <button id="logout-btn" class="btn danger" onclick="logoutCurrentUser()"><i class="fas fa-arrow-right-from-bracket"></i>退出</button>
+            </div>
+        </header>
+
+        <main class="layout">
+            <section class="panel list-panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">会话列表</div>
+                        <div id="list-meta" class="panel-meta">正在加载...</div>
+                    </div>
+                    <button id="clear-btn" class="btn" onclick="clearFilters()"><i class="fas fa-filter-circle-xmark"></i>清空</button>
+                </div>
+                <div class="stats-grid">
+                    <div class="stat"><div class="stat-label">会话</div><div id="stat-sessions" class="stat-value">--</div></div>
+                    <div class="stat"><div class="stat-label">进行中</div><div id="stat-active" class="stat-value">--</div></div>
+                    <div class="stat"><div class="stat-label">语音</div><div id="stat-audio" class="stat-value">--</div></div>
+                    <div class="stat"><div class="stat-label">认知均分</div><div id="stat-score" class="stat-value">--</div></div>
+                </div>
+                <div class="filters">
+                    <div class="search-row">
+                        <input id="search-input" class="input" placeholder="搜索患者姓名、会话ID、账号" oninput="applyFilters()">
+                        <button class="btn primary" onclick="applyFilters()"><i class="fas fa-magnifying-glass"></i>搜索</button>
+                    </div>
+                    <div class="control-row">
+                        <select id="status-filter" class="select" onchange="applyFilters()">
+                            <option value="all">全部状态</option>
+                            <option value="active">进行中</option>
+                            <option value="ended">已结束</option>
+                        </select>
+                        <select id="sort-select" class="select" onchange="applyFilters()">
+                            <option value="recent">最近活动优先</option>
+                            <option value="score-desc">认知分数从高到低</option>
+                            <option value="score-asc">认知分数从低到高</option>
+                            <option value="audio-desc">语音最多优先</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="session-list" class="session-list"><div class="loading"><i class="fas fa-spinner fa-spin"></i>加载中...</div></div>
+            </section>
+
+            <section class="panel detail-panel">
+                <div id="detail-empty" class="detail-empty">
+                    <div>
+                        <i class="fas fa-folder-open"></i>
+                        <div>选择左侧会话查看详情</div>
+                    </div>
+                </div>
+
+                <div id="detail-content" class="detail-content">
+                    <div class="detail-summary">
+                        <div>
+                            <div id="detail-name" class="detail-name">--</div>
+                            <div id="detail-sub" class="detail-sub"></div>
+                        </div>
+                        <div class="detail-actions">
+                            <button id="resume-btn" class="btn" onclick="resumeCurrentSession()"><i class="fas fa-play"></i>继续</button>
+                            <button class="btn" onclick="exportCurrentTxt()"><i class="fas fa-file-lines"></i>TXT</button>
+                            <button class="btn" onclick="exportCurrentCsv()"><i class="fas fa-file-csv"></i>CSV</button>
+                            <button class="btn" onclick="downloadCurrentMergedAudio()"><i class="fas fa-wave-square"></i>总音频</button>
+                            <button class="btn" onclick="downloadCurrentAudioZip()"><i class="fas fa-file-zipper"></i>音频包</button>
+                        </div>
+                    </div>
+                    <div class="metric-strip">
+                        <div class="metric"><div id="metric-score-label" class="label">模式</div><div id="metric-score" class="value">--</div></div>
+                        <div class="metric"><div class="label">消息</div><div id="metric-messages" class="value">--</div></div>
+                        <div class="metric"><div class="label">语音</div><div id="metric-audio" class="value">--</div></div>
+                        <div class="metric"><div class="label">状态</div><div id="metric-status" class="value">--</div></div>
+                        <div class="metric"><div class="label">归属</div><div id="metric-owner" class="value">--</div></div>
+                    </div>
+                    <div class="tabs">
+                        <button class="tab-btn active" data-tab="messages" onclick="switchTab('messages')"><i class="fas fa-comments"></i>对话</button>
+                        <button id="scores-tab-btn" class="tab-btn" data-tab="scores" onclick="switchTab('scores')"><i class="fas fa-chart-column"></i>评分</button>
+                        <button class="tab-btn" data-tab="audio" onclick="switchTab('audio')"><i class="fas fa-headphones"></i>音频</button>
+                    </div>
+                    <div id="tab-messages" class="tab-content active"></div>
+                    <div id="tab-scores" class="tab-content"></div>
+                    <div id="tab-audio" class="tab-content"></div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        const dimLabels = {
+            orientation: '定向力',
+            registration: '即时记忆',
+            attention_calculation: '注意与计算',
+            recall: '回忆能力',
+            language: '语言能力',
+            copy: '视空间'
+        };
+        let currentAuthUser = null;
+        let sessions = [];
+        let filteredSessions = [];
+        let currentDetail = null;
+
+        function redirectToLoginPage(next = window.location.pathname || '/history') {
+            const target = next && next.startsWith('/') ? next : '/history';
+            window.location.href = `/login?next=${encodeURIComponent(target)}`;
+        }
+
+        async function jsonFetch(url, options = {}) {
+            const resp = await fetch(url, { credentials: 'same-origin', ...options });
+            if (resp.status === 401) {
+                redirectToLoginPage(window.location.pathname + window.location.search);
+                throw new Error('UNAUTHORIZED');
+            }
+            if (resp.status === 403) {
+                showPermissionError();
+                throw new Error('FORBIDDEN');
+            }
+            const data = await resp.json();
+            if (!data.success && data.error) throw new Error(data.error);
+            return data;
+        }
+
+        function showPermissionError() {
+            document.querySelector('.layout').innerHTML = `
+                <section class="panel" style="grid-column:1/-1;min-height:360px;display:flex;align-items:center;justify-content:center;">
+                    <div class="notice error">
+                        <div style="font-size:28px;margin-bottom:10px;"><i class="fas fa-lock"></i></div>
+                        <div style="font-weight:850;font-size:18px;margin-bottom:8px;">当前账号没有历史记录权限</div>
+                        <div style="line-height:1.7;">历史记录、音频下载和导出现在仅管理员可访问。请让管理员在后台把当前账号设为管理员，或使用管理员账号登录。</div>
+                    </div>
+                </section>`;
+        }
+
+        async function bootstrapAuthUser() {
+            try {
+                const data = await jsonFetch('/api/auth/me');
+                currentAuthUser = data.user;
+                const displayName = currentAuthUser.display_name || currentAuthUser.username || '已登录用户';
+                document.getElementById('auth-user-name').textContent = displayName;
+                document.getElementById('auth-user-chip').title = `${displayName} (${currentAuthUser.username})`;
+                if (String(currentAuthUser.role || '').toLowerCase() !== 'admin') {
+                    showPermissionError();
+                    return false;
+                }
+                return true;
+            } catch (err) {
+                if (!['UNAUTHORIZED', 'FORBIDDEN'].includes(err.message)) {
+                    console.error('auth bootstrap failed', err);
+                    redirectToLoginPage(window.location.pathname + window.location.search);
+                }
+                return false;
+            }
+        }
+
+        async function logoutCurrentUser() {
+            const btn = document.getElementById('logout-btn');
+            if (btn) btn.disabled = true;
+            try { await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }); }
+            finally { redirectToLoginPage('/history'); }
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+        function formatDateTime(value) {
+            if (!value) return '未知时间';
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString('zh-CN');
+        }
+        function formatDateShort(value) {
+            if (!value) return '未知';
+            const date = new Date(value);
+            return Number.isNaN(date.getTime()) ? String(value).slice(0, 16) : date.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }) + ' ' + date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        }
+        function formatDuration(value) {
+            const num = Number(value || 0);
+            if (!Number.isFinite(num) || num <= 0) return '未知';
+            if (num >= 60) return `${Math.floor(num / 60)}分${Math.round(num % 60)}秒`;
+            return `${num.toFixed(1)}秒`;
+        }
+        function normalizePatientName(session) {
+            return (session.patient_name || session?.profile?.name || '').trim() || '未命名患者';
+        }
+        function sessionMode(session) {
+            return String(session?.mode || session?.session?.mode || 'wellbeing').trim().toLowerCase() || 'wellbeing';
+        }
+        function isCognitiveSession(session) {
+            return sessionMode(session) === 'cognitive_screening';
+        }
+        function modeLabel(session) {
+            const mode = sessionMode(session);
+            if (mode === 'cognitive_screening') return '认知筛查专项';
+            if (mode === 'legacy') return '历史会话';
+            return '心理健康陪伴';
+        }
+        function getSessionScore(session) {
+            if (!isCognitiveSession(session)) return { score: 0, max: 0, hasScore: false };
+            const score = session.derived_mmse_score ?? session.total_mmse_score;
+            const max = session.derived_mmse_max_score ?? 35;
+            return { score: Number(score ?? 0), max: Number(max || 35), hasScore: score != null };
+        }
+        function getLastActivity(session) {
+            return session.last_activity_at || session.ended_at || session.created_at || '';
+        }
+        function resolveApiUrl(url) {
+            if (!url) return '';
+            if (/^https?:\/\//i.test(url)) return url;
+            if (url.startsWith('/')) return `${API_BASE}${url}`;
+            return `${API_BASE}/${url}`;
+        }
+        function downloadByUrl(url) {
+            if (!url) return;
+            const a = document.createElement('a');
+            a.href = resolveApiUrl(url);
+            a.target = '_blank';
+            a.rel = 'noopener';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        async function refreshSessions() {
+            const listEl = document.getElementById('session-list');
+            listEl.innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i>正在加载会话...</div>';
+            try {
+                const data = await jsonFetch(`${API_BASE}/api/sessions?limit=300`);
+                sessions = data.sessions || [];
+                applyFilters();
+                if (!currentDetail && filteredSessions.length) openDetail(filteredSessions[0].session_id);
+            } catch (err) {
+                if (!['UNAUTHORIZED', 'FORBIDDEN'].includes(err.message)) {
+                    listEl.innerHTML = `<div class="empty">加载失败：${escapeHtml(err.message)}</div>`;
+                }
+            }
+        }
+
+        function clearFilters() {
+            document.getElementById('search-input').value = '';
+            document.getElementById('status-filter').value = 'all';
+            document.getElementById('sort-select').value = 'recent';
+            applyFilters();
+        }
+
+        function applyFilters() {
+            const q = document.getElementById('search-input').value.trim().toLowerCase();
+            const status = document.getElementById('status-filter').value;
+            const sort = document.getElementById('sort-select').value;
+            filteredSessions = sessions.filter((session) => {
+                const ended = !!session.ended_at;
+                if (status === 'active' && ended) return false;
+                if (status === 'ended' && !ended) return false;
+                if (!q) return true;
+                const haystack = [
+                    normalizePatientName(session), session.session_id, session.patient_gender,
+                    session.owner_username, session.owner_display_name, session.cognitive_status
+                ].join(' ').toLowerCase();
+                return haystack.includes(q);
+            });
+            filteredSessions.sort((a, b) => {
+                if (sort === 'score-desc') return getSessionScore(b).score - getSessionScore(a).score;
+                if (sort === 'score-asc') return getSessionScore(a).score - getSessionScore(b).score;
+                if (sort === 'audio-desc') return Number(b.audio_count || 0) - Number(a.audio_count || 0);
+                return String(getLastActivity(b)).localeCompare(String(getLastActivity(a)));
+            });
+            renderStats();
+            renderSessionList();
+        }
+
+        function renderStats() {
+            const active = filteredSessions.filter(s => !s.ended_at).length;
+            const audioCount = filteredSessions.reduce((sum, s) => sum + Number(s.audio_count || 0), 0);
+            const scored = filteredSessions.filter(s => isCognitiveSession(s) && getSessionScore(s).hasScore);
+            const avg = scored.length ? Math.round(scored.reduce((sum, s) => sum + getSessionScore(s).score, 0) / scored.length) : '--';
+            document.getElementById('stat-sessions').textContent = filteredSessions.length;
+            document.getElementById('stat-active').textContent = active;
+            document.getElementById('stat-audio').textContent = audioCount;
+            document.getElementById('stat-score').textContent = avg === '--' ? '--' : `${avg}`;
+            document.getElementById('list-meta').textContent = `显示 ${filteredSessions.length} / ${sessions.length} 条`;
+        }
+
+        function renderSessionList() {
+            const listEl = document.getElementById('session-list');
+            if (!filteredSessions.length) {
+                listEl.innerHTML = '<div class="empty"><i class="fas fa-inbox"></i><br>没有匹配的会话</div>';
+                return;
+            }
+            listEl.innerHTML = filteredSessions.map(renderSessionRow).join('');
+            if (currentDetail) {
+                const activeRow = listEl.querySelector(`[data-session-id="${CSS.escape(currentDetail.session.session_id)}"]`);
+                if (activeRow) activeRow.classList.add('active');
+            }
+        }
+
+        function renderSessionRow(session) {
+            const name = normalizePatientName(session);
+            const gender = session.patient_gender || '';
+            const age = session.patient_age ? `${session.patient_age}岁` : '';
+            const score = getSessionScore(session);
+            const ended = !!session.ended_at;
+            const statusBadge = ended ? '<span class="badge">已结束</span>' : '<span class="badge ok">进行中</span>';
+            const owner = session.owner_display_name || session.owner_username || '未归属';
+            const cognitive = isCognitiveSession(session);
+            return `
+                <button class="session-row" data-session-id="${escapeHtml(session.session_id)}" onclick="openDetail('${escapeHtml(session.session_id)}')">
+                    <div class="session-main">
+                        <div class="session-name-line">
+                            <span class="session-name">${escapeHtml(name)}</span>
+                            ${gender ? `<span class="badge blue">${escapeHtml(gender)}</span>` : ''}
+                            ${age ? `<span class="badge">${escapeHtml(age)}</span>` : ''}
+                        </div>
+                        <div class="session-id">${escapeHtml(session.session_id)}</div>
+                        <div class="session-time"><i class="fas fa-clock"></i>${escapeHtml(formatDateShort(getLastActivity(session)))} · ${escapeHtml(owner)}</div>
+                        <div class="badges">
+                            <span class="badge ${cognitive ? 'warn' : 'blue'}">${escapeHtml(modeLabel(session))}</span>
+                            ${statusBadge}
+                            <span class="badge"><i class="fas fa-comments"></i>${Number(session.message_count || 0)}</span>
+                            <span class="badge"><i class="fas fa-headphones"></i>${Number(session.audio_count || 0)}</span>
+                            ${cognitive && session.cognitive_status ? `<span class="badge warn">${escapeHtml(session.cognitive_status)}</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="session-score">${cognitive ? (score.hasScore ? `${score.score}/${score.max}` : '--') : ''}<small>${cognitive ? 'MMSE' : '陪伴'}</small></div>
+                </button>`;
+        }
+
+        async function openDetail(sessionId) {
+            document.querySelectorAll('.session-row').forEach(row => row.classList.toggle('active', row.dataset.sessionId === sessionId));
+            document.getElementById('detail-empty').style.display = 'none';
+            document.getElementById('detail-content').classList.add('open');
+            document.getElementById('tab-messages').innerHTML = '<div class="loading"><i class="fas fa-spinner fa-spin"></i>正在加载详情...</div>';
+            document.getElementById('tab-scores').innerHTML = '';
+            document.getElementById('tab-audio').innerHTML = '';
+            switchTab('messages');
+            try {
+                const data = await jsonFetch(`${API_BASE}/api/sessions/${encodeURIComponent(sessionId)}`);
+                currentDetail = data;
+                renderDetail(data);
+            } catch (err) {
+                if (!['UNAUTHORIZED', 'FORBIDDEN'].includes(err.message)) {
+                    document.getElementById('tab-messages').innerHTML = `<div class="empty">加载失败：${escapeHtml(err.message)}</div>`;
+                }
+            }
+        }
+
+        function renderDetail(data) {
+            const s = data.session || {};
+            const name = normalizePatientName(s);
+            const score = getDetailScore(data);
+            const audios = data.audio_files || [];
+            const messages = data.messages || [];
+            const owner = s.owner_display_name || s.owner_username || '未归属';
+            const cognitive = isCognitiveSession(s);
+            document.getElementById('detail-name').textContent = name;
+            document.getElementById('detail-sub').innerHTML = [
+                escapeHtml(modeLabel(s)),
+                s.patient_age ? `${escapeHtml(s.patient_age)}岁` : '',
+                s.patient_gender ? escapeHtml(s.patient_gender) : '',
+                `开始 ${escapeHtml(formatDateTime(s.created_at))}`,
+                s.ended_at ? `结束 ${escapeHtml(formatDateTime(s.ended_at))}` : '进行中'
+            ].filter(Boolean).map(x => `<span>${x}</span>`).join('');
+            document.getElementById('metric-score-label').textContent = cognitive ? 'MMSE' : '模式';
+            document.getElementById('metric-score').textContent = cognitive && score.max ? `${score.score}/${score.max}` : modeLabel(s);
+            document.getElementById('metric-messages').textContent = messages.length;
+            document.getElementById('metric-audio').textContent = audios.length;
+            document.getElementById('metric-status').textContent = s.ended_at ? '已结束' : '进行中';
+            document.getElementById('metric-owner').textContent = owner;
+            document.getElementById('resume-btn').disabled = !!s.ended_at;
+            document.getElementById('scores-tab-btn').hidden = !cognitive;
+            renderMessages(messages);
+            renderScores(data.mmse_scores || [], s);
+            renderAudio(data.session?.session_id || s.session_id, audios);
+        }
+
+        function getDetailScore(data) {
+            if (!isCognitiveSession(data.session || {})) return { score: 0, max: 0 };
+            const scores = data.mmse_scores || [];
+            if (!scores.length) return { score: 0, max: 0 };
+            return scores.reduce((acc, item) => {
+                acc.score += Number(item.score || 0);
+                acc.max += Number(item.max_score || 0);
+                return acc;
+            }, { score: 0, max: 0 });
+        }
+
+        function renderMessages(messages) {
+            const el = document.getElementById('tab-messages');
+            if (!messages.length) { el.innerHTML = '<div class="empty">暂无对话记录</div>'; return; }
+            el.innerHTML = `<div class="timeline">${messages.map((m) => {
+                const isUser = m.role === 'user';
+                return `<div class="message ${isUser ? 'user' : 'assistant'}">
+                    <div class="avatar"><i class="fas ${isUser ? 'fa-user' : 'fa-robot'}"></i></div>
+                    <div class="bubble">
+                        <div class="bubble-text">${escapeHtml(m.content || '')}</div>
+                        <div class="bubble-meta">${isUser ? '患者' : 'AI助手'} · ${escapeHtml(formatDateTime(m.created_at))}</div>
+                    </div>
+                </div>`;
+            }).join('')}</div>`;
+        }
+
+        function renderScores(scores, session) {
+            const el = document.getElementById('tab-scores');
+            if (!isCognitiveSession(session)) {
+                el.innerHTML = '<div class="empty">本会话无认知筛查。</div>';
+                return;
+            }
+            if (!scores.length) { el.innerHTML = '<div class="empty">暂无认知评分数据</div>'; return; }
+            el.innerHTML = `<div class="score-grid">${scores.map((s) => `
+                <div class="score-card">
+                    <div class="dim">${escapeHtml(dimLabels[s.dimension_id] || s.dimension_id || '未知维度')}</div>
+                    <div class="score">${Number(s.score || 0)}<span style="font-size:14px;color:var(--muted);"> / ${Number(s.max_score || 0)}</span></div>
+                    <div class="detail">${escapeHtml(s.evaluation_detail || s.task_id || '')}</div>
+                </div>`).join('')}</div>`;
+        }
+
+        function renderAudio(sessionId, audios) {
+            const el = document.getElementById('tab-audio');
+            if (!audios.length) { el.innerHTML = '<div class="empty">暂无可回放音频</div>'; return; }
+            const counters = { user: 0, assistant: 0 };
+            el.innerHTML = `
+                <div class="audio-toolbar">
+                    <div class="panel-meta">共 ${audios.length} 条音频，按采集时间排列</div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                        <button class="btn" onclick="downloadCurrentMergedAudio()"><i class="fas fa-wave-square"></i>总音频</button>
+                        <button class="btn" onclick="downloadCurrentAudioZip()"><i class="fas fa-file-zipper"></i>音频包</button>
+                    </div>
+                </div>
+                <div class="audio-list">${audios.map((audio) => {
+                    const role = audio.role === 'assistant' ? 'assistant' : 'user';
+                    counters[role] = (counters[role] || 0) + 1;
+                    const roleLabel = audio.role_label || (role === 'assistant' ? '系统语音' : '用户语音');
+                    return `<div class="audio-row">
+                        <div class="audio-head">
+                            <div class="audio-title"><span class="badge ${role === 'assistant' ? 'warn' : 'blue'}">${escapeHtml(roleLabel)}</span><span>${escapeHtml(roleLabel)} ${counters[role]}</span></div>
+                            <button class="btn" onclick="downloadByUrl('${escapeHtml(resolveApiUrl(audio.download_url || ''))}')"><i class="fas fa-download"></i>下载</button>
+                        </div>
+                        <audio controls preload="none" src="${escapeHtml(resolveApiUrl(audio.audio_url || ''))}"></audio>
+                        <div class="audio-text">${escapeHtml(formatDateTime(audio.created_at))} · ${escapeHtml(formatDuration(audio.duration_s))} · ${escapeHtml(audio.display_text || audio.content_text || audio.asr_text || audio.file_name || '暂无文本')}</div>
+                    </div>`;
+                }).join('')}</div>`;
+        }
+
+        function switchTab(tab) {
+            if (tab === 'scores' && document.getElementById('scores-tab-btn')?.hidden) tab = 'messages';
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+            document.querySelectorAll('.tab-content').forEach(content => content.classList.toggle('active', content.id === `tab-${tab}`));
+        }
+
+        function currentSessionId() {
+            return currentDetail?.session?.session_id || '';
+        }
+        function resumeCurrentSession() {
+            const sid = currentSessionId();
+            if (!sid) return;
+            try { localStorage.setItem('voice_session_id', sid); } catch (_) {}
+            window.location.href = '/';
+        }
+        function exportCurrentCsv() {
+            const sid = currentSessionId();
+            if (sid) window.open(`${API_BASE}/api/sessions/${encodeURIComponent(sid)}/export/csv`, '_blank');
+        }
+        function downloadCurrentMergedAudio() {
+            const sid = currentSessionId();
+            if (sid) downloadByUrl(`/api/sessions/${encodeURIComponent(sid)}/export/audio-merged.wav`);
+        }
+        function downloadCurrentAudioZip() {
+            const sid = currentSessionId();
+            if (sid) downloadByUrl(`/api/sessions/${encodeURIComponent(sid)}/export/audio-clips.zip`);
+        }
+        function exportCurrentTxt() {
+            if (!currentDetail) return;
+            const txt = buildTxtContent(currentDetail);
+            const name = currentDetail.session?.patient_name || '未知';
+            downloadTxt(txt, name, currentSessionId());
+        }
+        function buildTxtContent(data) {
+            const s = data.session || {};
+            const lines = [];
+            const cognitive = isCognitiveSession(s);
+            lines.push(cognitive ? '认知筛查专项记录' : '心理健康陪伴记录');
+            lines.push('='.repeat(36));
+            lines.push(`患者姓名: ${s.patient_name || '未知'}`);
+            lines.push(`会话模式: ${modeLabel(s)}`);
+            lines.push(`年龄: ${s.patient_age || '未填写'}`);
+            lines.push(`性别: ${s.patient_gender || '未填写'}`);
+            lines.push(`开始时间: ${s.created_at || ''}`);
+            lines.push(`结束时间: ${s.ended_at || '进行中'}`);
+            lines.push('');
+            const score = getDetailScore(data);
+            if (cognitive) {
+                if (score.max) lines.push(`MMSE总分: ${score.score}/${score.max}`);
+                (data.mmse_scores || []).forEach(item => lines.push(`${dimLabels[item.dimension_id] || item.dimension_id}: ${item.score}/${item.max_score}`));
+            } else {
+                lines.push('本会话无认知筛查评分。');
+            }
+            lines.push('');
+            lines.push('对话记录');
+            lines.push('-'.repeat(36));
+            (data.messages || []).forEach((m, i) => {
+                lines.push(`[${String(i + 1).padStart(3, '0')}] ${m.role === 'user' ? '患者' : 'AI助手'} ${m.created_at || ''}`);
+                lines.push(m.content || '');
+                lines.push('');
+            });
+            return lines.join('\n');
+        }
+        function downloadTxt(content, name, sessionId) {
+            const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const prefix = currentDetail && isCognitiveSession(currentDetail.session) ? '认知筛查记录' : '陪伴记录';
+            a.download = `${prefix}_${name}_${String(sessionId || '').slice(0, 16)}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+
+        bootstrapAuthUser().then((ready) => {
+            if (ready) refreshSessions();
+        });
+    </script>
+</body>
+</html>

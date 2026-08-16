@@ -1,0 +1,2 @@
+# CPU runtime for the local Emotion2Vec+ model. PyTorch wheels are installed separately.
+funasr==1.0.27

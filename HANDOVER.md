@@ -1,0 +1,202 @@
+# LMCA 代码交接说明
+
+更新时间：2026-08-13  
+交接目标：让下一位开发者能在当前目录复现、验证并继续开发，不把本地密钥和患者/测试数据当作源码交付。
+
+## 1. 先看什么
+
+按这个顺序阅读：
+
+1. `HANDOVER.md`（本文）
+2. `README.md`（产品定位、依赖和 Docker 入口）
+3. `PRODUCT.md`、`DESIGN.md`、`DELIVERY.md`（历史设计和交付背景）
+4. `voice_server.py`（服务组合根）
+5. `src/voice/application.py`、`src/voice/services.py`、`src/voice/handlers/speech_turn_processor.py`
+6. `src/agents/screening/`（筛查回合流水线）
+7. `src/context_management/emotion_memobase.py`（长期记忆）
+8. `src/web/memory_api.py`、`src/web/public_api.py`（记忆和公开 HTTP API）
+9. 对应的 `tests/` 文件，再看 `.planning/2026-08-13-memory-remediation-plan/` 和根目录 `长期记忆引擎修复与情感陪伴增强修改方案.md`。
+
+## 2. 项目定位和调用链
+
+这是一个面向临床/照护场景的低压力语音认知筛查和情感陪伴服务。主入口是 FastAPI 应用 `voice_server.py`，默认端口 `8502`。
+
+```text
+浏览器 WebRTC / 兼容 WebSocket
+  -> VoiceEndpointApplication
+  -> VoiceSession + VoiceMessageRouter
+  -> handlers（音频、回合、生命周期、打断）
+  -> SpeechTurnProcessor
+  -> ASR -> 筛查 Agent / Wellbeing Agent -> TTS -> 持久化
+  -> PatientMemoryService -> EmotionMemobase(SQLite + 可选 Memobase)
+```
+
+主要目录：
+
+| 路径 | 职责 |
+|---|---|
+| `voice_server.py` | 配置、依赖组装、FastAPI 生命周期、WebRTC/WebSocket 入口 |
+| `src/voice/` | 连接、会话、媒体、运行时、语音服务和持久化 |
+| `src/voice/handlers/` | 按消息类型拆分的处理器 |
+| `src/agents/screening/` | 筛查状态、任务规划、答案评估、问题生成和回合流水线 |
+| `src/agents/wellbeing_companion_agent.py` | 情感陪伴 Agent 及记忆工具 |
+| `src/context_management/emotion_memobase.py` | 患者长期记忆、情绪轨迹、本地 SQLite、Memobase 镜像 |
+| `src/web/` | 认证、管理页面、公开 API、记忆 API |
+| `static/` | 当前后端使用的静态页面 |
+| `frontend/` | 独立 Vue/Vite 记忆界面，当前只包含少量源码 |
+| `tests/` | 43 个 Python 测试文件，按 agents/voice/web/integrations 分组 |
+| `kb/` | 阿尔茨海默病、抑郁等知识库切片；不需要改记忆引擎时不要重建 |
+| `models/` | 本地 ONNX/TTS/重排模型，约 3.8 GB |
+
+## 3. 当前运行方式
+
+### 3.1 Windows 本地检查
+
+当前机器实测环境：Python `3.13.0`（`E:\python\python.exe`）、pytest `9.0.3`、Node `v24.14.0`、npm `11.17.0`。项目 README 原本按 Python 3.11 编写；正式部署仍建议 Python 3.11，Python 3.13 只代表当前测试环境。
+
+在项目根目录执行：
+
+```powershell
+$env:PYTHONPATH=(Get-Location).Path
+python -m pytest -q
+python -m compileall -q voice_server.py src tests
+```
+
+当前 `pytest -q` 结果：**362 passed**。本次交接前曾发现 3 个 benchmark 测试夹具落后于脚本签名，已补齐后恢复全绿。脚本当前参数包括：
+
+- `_run_once(..., long_term_memory_enabled, audio_output)`；
+- `_run_benchmark()` 读取 `args.long_term_memory` 和 `args.audio_output_dir`。
+
+### 3.2 前端
+
+```powershell
+Set-Location frontend
+npm ci
+npm run build
+npm run dev
+```
+
+当前实测 `npm run build` 通过。Vite 开发服务器默认端口通常为 `5173`，接口地址由 `frontend/vite.config.js` 代理配置决定。
+
+### 3.3 后端启动
+
+PowerShell 下直接启动：
+
+```powershell
+$env:PYTHONPATH=(Get-Location).Path
+python -m uvicorn voice_server:app --host 0.0.0.0 --port 8502
+```
+
+或：
+
+```powershell
+$env:PYTHONPATH=(Get-Location).Path
+python voice_server.py
+```
+
+健康检查：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8502/health
+```
+
+本次检查时 `8502` 没有运行进程，因此没有做真实页面或实时语音链路验收。Linux/macOS 的 `start_voice_only.sh` 依赖原机器的 SoulX、CUDA 和 bash 路径，不能当作 Windows 启动脚本。
+
+### 3.4 Docker
+
+```powershell
+Copy-Item .env.example .env
+# 编辑 .env，填入真实 Key；不要把 .env 交给无权限人员
+docker compose config --quiet
+docker compose up -d --build
+Invoke-RestMethod http://127.0.0.1:8502/health
+```
+
+根目录 Compose 同时定义语音服务、Memobase API、PostgreSQL 和 Redis。只启动 `voice-server` 时，Memobase 远端服务不可用，系统应走本地能力；完整 Compose 需要数据库、Redis、Memobase 所需变量。
+
+## 4. 依赖与配置
+
+- 主运行依赖：`requirements.txt`。
+- Windows API-only 依赖：`requirements_windows.txt`。
+- 测试：`requirements-test.txt`。
+- 前端：`frontend/package.json` / `frontend/package-lock.json`。
+- 配置模板：`.env.example`。
+- 当前 `.env` 存在于磁盘，但属于密钥文件，不应复制、提交或在聊天中打印。
+
+重要配置组：
+
+| 配置 | 作用 |
+|---|---|
+| `DASHSCOPE_API_KEY` / `DASHSCOPE_CHAT_MODEL` | 正式回复 LLM |
+| `DASHSCOPE_CONSOLIDATION_MODEL` | 会话结束长期记忆整理 |
+| `VOLC_APP_ID` / `VOLC_ACCESS_TOKEN` | 火山 ASR/TTS |
+| `USE_ARK_ASR` / `USE_ARK_TTS` | 云端或本地语音实现 |
+| `ENABLE_LONG_TERM_MEMORY` | 是否启用长期记忆读取 |
+| `ENABLE_LONG_TERM_MEMORY_WRITES` | 是否允许长期记忆写入 |
+| `MEMOBASE_PROJECT_URL` / `MEMOBASE_API_KEY` | Memobase 语义镜像 |
+| `USE_SOULX_TURN_TAKING` | 是否接入外部 SoulX 全双工轮次服务 |
+| `PUBLIC_API_KEYS` | `/v1` 公开 API 调用凭据 |
+
+## 5. 数据和交付边界
+
+当前目录不是 Git 仓库：没有发现 `.git` 目录或可用提交历史。因此交接时不能使用 `git diff` 或 commit hash 证明当前代码版本；应先由接收方建立 Git 仓库或导出一份受控压缩包并记录 SHA-256。
+
+当前磁盘包含以下本地数据：
+
+- `data/`：SQLite、患者/测试会话、录音、声纹、评分、Memobase 本地数据和生成的 API/安全密钥；约 2.0 GB。
+- `tmp/`：测试数据库、WAV、benchmark JSON、运行日志；约 16 MB。
+- `models/`：本地模型；约 3.8 GB。
+- `frontend/dist/`：前端构建产物，由 `npm run build` 生成。
+- `.env`：真实配置/密钥，禁止外发。
+
+建议交接方式：
+
+1. 当前交接包除源码、配置模板、文档和测试夹具外，经用户明确授权加入“林秀兰”虚构演示患者的脱敏测试数据；不要把它继续扩展为整个原始 `data/` 目录。
+2. 患者/真实会话数据单独加密传输，并明确接收权限；没有明确需求就不要交 `data/voice_calls`、数据库和 WAV。
+3. 接收方自行创建 `.env`，不要复用聊天中出现的 Key；如 `.env` 曾被复制到外部，应立即轮换相关密钥。
+4. 大模型和语音模型按部署需求单独传输；API-only Docker 可以不交全部 `models/`。
+
+本次测试数据的具体范围和脱敏处理见 `TEST_DATA_LIN_XIULAN.md`。原始数据库、其他患者、个人管理员账号、密码哈希、API key 和认证 secret 不在包内。
+
+当前目录存在与 `.gitignore` 预期不一致的运行文件，接收前需要人工决定是否清理，不能盲删：`.env`、`data/`、`tmp/`、`models/`、`vendor/`、录音和数据库均可能影响复现。
+
+## 6. 长期记忆当前状态
+
+当前实现是“SQLite 本地归档 + 可选异步 Memobase 语义镜像”，还不是完整可靠的情感长期陪伴记忆引擎。已识别但尚未实施的主要问题和方案在：
+
+- `长期记忆引擎修复与情感陪伴增强修改方案.md`
+- `.planning/2026-08-13-memory-remediation-plan/findings.md`
+- `.planning/2026-08-13-memory-remediation-plan/progress.md`
+
+上一轮明确冻结、不应被接手人误做的三项：
+
+1. 不改变普通轮次 Memobase 同步时机；
+2. 不补文字输入逐轮语义检索；
+3. 不做患者级同意、保留期和全链路物理擦除。
+
+推荐实现顺序：先修确定性一致性，再做召回/上下文，之后做受约束情感抽取和纠错界面。实施前必须确认方案末尾的四项产品取舍，尤其是 `memory_items` 是否成为唯一结构化事实源。
+
+## 7. 接手后的第一批任务
+
+1. 重新执行 `python -m pytest -q`，确认本次 benchmark 测试夹具修复后全绿；若仍失败，先修测试/脚本契约，不要开始长期记忆架构迁移。
+2. 创建 Git 仓库或导出受控基线，记录当前工作区文件清单和 SHA-256。
+3. 用脱敏/空数据启动服务，确认 `/health`、登录、WebSocket/WebRTC 协商和前端页面。
+4. 阅读长期记忆方案并确认四个取舍；确认前不改 `emotion_memobase.py` 的事实源架构。
+5. 若开始实施，先补 D01/D02/D04/D05 的最小回归测试，再改共享读写路径。
+6. 真实语音链路需要云 Key、火山服务和可选 SoulX；没有这些只能做 mock、静态或单元测试，不能宣称端到端通过。
+
+## 8. 已知工具提示
+
+每次 PowerShell 工具输出都可能出现：`[dcg] Hook missing from ~/.claude/settings.json - run: dcg install`。这是本机 Codex/工具钩子提示，不是项目测试失败；不要为此修改项目配置。
+
+## 9. 本次交接前验证记录
+
+| 检查 | 结果 |
+|---|---|
+| Python 版本 | 3.13.0；正式部署建议 3.11 |
+| `python -m pytest -q` | 通过：362 passed in 8.09s |
+| `python -m compileall -q voice_server.py src tests` | 通过 |
+| `frontend/npm run build` | 通过 |
+| `docker compose config --quiet` | 通过 |
+| `http://127.0.0.1:8502/health` | 当前未启动，无法连接 |
+| Git 状态/历史 | 当前目录无 `.git`，不可验证 |

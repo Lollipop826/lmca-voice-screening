@@ -1,0 +1,915 @@
+{
+  "version": "1.0",
+  "total_samples": 50,
+  "emotion_labels": [
+    "joy",
+    "sadness",
+    "anger",
+    "fear",
+    "anxiety",
+    "calm",
+    "confusion"
+  ],
+  "samples": [
+    {
+      "sample_id": "mock_sample_0",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_0.wav",
+      "text": "我最近睡眠不好，总是半夜醒来",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_1",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_1.wav",
+      "text": "今天天气真好，心情不错",
+      "true_emotion": "joy",
+      "emotion_scores": {
+        "joy": 0.65,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_2",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_2.wav",
+      "text": "我感觉记忆力下降了，很担心",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_3",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_3.wav",
+      "text": "工作压力太大，感觉喘不过气",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_4",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_4.wav",
+      "text": "我今天很平静，没什么特别的",
+      "true_emotion": "calm",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.65,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_5",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_5.wav",
+      "text": "孩子不听话，我很生气",
+      "true_emotion": "anger",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.65,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_6",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_6.wav",
+      "text": "我有点搞不清楚状况",
+      "true_emotion": "confusion",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.65
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_7",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_7.wav",
+      "text": "感觉很难过，提不起精神",
+      "true_emotion": "sadness",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.65,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_8",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_8.wav",
+      "text": "我最近睡眠不好，总是半夜醒来",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_9",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_9.wav",
+      "text": "今天天气真好，心情不错",
+      "true_emotion": "joy",
+      "emotion_scores": {
+        "joy": 0.65,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_10",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_10.wav",
+      "text": "我感觉记忆力下降了，很担心",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_11",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_11.wav",
+      "text": "工作压力太大，感觉喘不过气",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_12",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_12.wav",
+      "text": "我今天很平静，没什么特别的",
+      "true_emotion": "calm",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.65,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_13",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_13.wav",
+      "text": "孩子不听话，我很生气",
+      "true_emotion": "anger",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.65,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_14",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_14.wav",
+      "text": "我有点搞不清楚状况",
+      "true_emotion": "confusion",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.65
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_15",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_15.wav",
+      "text": "感觉很难过，提不起精神",
+      "true_emotion": "sadness",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.65,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_16",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_16.wav",
+      "text": "我最近睡眠不好，总是半夜醒来",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_17",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_17.wav",
+      "text": "今天天气真好，心情不错",
+      "true_emotion": "joy",
+      "emotion_scores": {
+        "joy": 0.65,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_18",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_18.wav",
+      "text": "我感觉记忆力下降了，很担心",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_19",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_19.wav",
+      "text": "工作压力太大，感觉喘不过气",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_20",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_20.wav",
+      "text": "我今天很平静，没什么特别的",
+      "true_emotion": "calm",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.65,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_21",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_21.wav",
+      "text": "孩子不听话，我很生气",
+      "true_emotion": "anger",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.65,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_22",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_22.wav",
+      "text": "我有点搞不清楚状况",
+      "true_emotion": "confusion",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.65
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_23",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_23.wav",
+      "text": "感觉很难过，提不起精神",
+      "true_emotion": "sadness",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.65,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_24",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_24.wav",
+      "text": "我最近睡眠不好，总是半夜醒来",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_25",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_25.wav",
+      "text": "今天天气真好，心情不错",
+      "true_emotion": "joy",
+      "emotion_scores": {
+        "joy": 0.65,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_26",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_26.wav",
+      "text": "我感觉记忆力下降了，很担心",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_27",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_27.wav",
+      "text": "工作压力太大，感觉喘不过气",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_28",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_28.wav",
+      "text": "我今天很平静，没什么特别的",
+      "true_emotion": "calm",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.65,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_29",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_29.wav",
+      "text": "孩子不听话，我很生气",
+      "true_emotion": "anger",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.65,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_30",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_30.wav",
+      "text": "我有点搞不清楚状况",
+      "true_emotion": "confusion",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.65
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_31",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_31.wav",
+      "text": "感觉很难过，提不起精神",
+      "true_emotion": "sadness",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.65,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_32",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_32.wav",
+      "text": "我最近睡眠不好，总是半夜醒来",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_33",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_33.wav",
+      "text": "今天天气真好，心情不错",
+      "true_emotion": "joy",
+      "emotion_scores": {
+        "joy": 0.65,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_34",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_34.wav",
+      "text": "我感觉记忆力下降了，很担心",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_35",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_35.wav",
+      "text": "工作压力太大，感觉喘不过气",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_36",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_36.wav",
+      "text": "我今天很平静，没什么特别的",
+      "true_emotion": "calm",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.65,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_37",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_37.wav",
+      "text": "孩子不听话，我很生气",
+      "true_emotion": "anger",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.65,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_38",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_38.wav",
+      "text": "我有点搞不清楚状况",
+      "true_emotion": "confusion",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.65
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_39",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_39.wav",
+      "text": "感觉很难过，提不起精神",
+      "true_emotion": "sadness",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.65,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_40",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_40.wav",
+      "text": "我最近睡眠不好，总是半夜醒来",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_41",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_41.wav",
+      "text": "今天天气真好，心情不错",
+      "true_emotion": "joy",
+      "emotion_scores": {
+        "joy": 0.65,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_42",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_42.wav",
+      "text": "我感觉记忆力下降了，很担心",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_43",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_43.wav",
+      "text": "工作压力太大，感觉喘不过气",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_44",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_44.wav",
+      "text": "我今天很平静，没什么特别的",
+      "true_emotion": "calm",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.65,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_45",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_45.wav",
+      "text": "孩子不听话，我很生气",
+      "true_emotion": "anger",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.65,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_46",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_46.wav",
+      "text": "我有点搞不清楚状况",
+      "true_emotion": "confusion",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.65
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_47",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_47.wav",
+      "text": "感觉很难过，提不起精神",
+      "true_emotion": "sadness",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.65,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "young",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_48",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_48.wav",
+      "text": "我最近睡眠不好，总是半夜醒来",
+      "true_emotion": "anxiety",
+      "emotion_scores": {
+        "joy": 0.05,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.65,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "elderly",
+      "timestamp": null,
+      "source": "mock"
+    },
+    {
+      "sample_id": "mock_sample_49",
+      "audio_path": "tests\\emotion_benchmark\\testset\\audio\\mock_sample_49.wav",
+      "text": "今天天气真好，心情不错",
+      "true_emotion": "joy",
+      "emotion_scores": {
+        "joy": 0.65,
+        "sadness": 0.05,
+        "anger": 0.05,
+        "fear": 0.05,
+        "anxiety": 0.05,
+        "calm": 0.05,
+        "confusion": 0.05
+      },
+      "age_group": "middle_aged",
+      "timestamp": null,
+      "source": "mock"
+    }
+  ]
+}

@@ -1,0 +1,1630 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#F3F7F9">
+    <title>记忆守护 API · 开发者工作台</title>
+    <style>
+        :root {
+            --bg: #F3F7F9;
+            --surface: #FFFFFF;
+            --surface-wash: #F7FAFB;
+            --surface-control: #EDF3F8;
+            --surface-selected: #EAF4F4;
+            --line: #D9E3E8;
+            --line-strong: #BCCBD3;
+            --ink: #243142;
+            --ink-strong: #111827;
+            --muted: #5F7084;
+            --primary: #438EA0;
+            --primary-dark: #2C6E7F;
+            --primary-ink: #195363;
+            --info: #2459C8;
+            --info-soft: #EBF1FF;
+            --success: #23724F;
+            --success-soft: #E8F5EE;
+            --warning: #996515;
+            --warning-soft: #FFF5DB;
+            --danger: #B42318;
+            --danger-soft: #FDECEB;
+            --code-bg: #17232C;
+            --code-ink: #E8F3F5;
+            --radius-sm: 8px;
+            --radius: 12px;
+            --radius-lg: 16px;
+            --focus: 0 0 0 3px rgba(67, 142, 160, 0.16);
+            --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+            --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            --sidebar: 264px;
+        }
+
+        * { box-sizing: border-box; }
+        [hidden] { display: none !important; }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            margin: 0;
+            min-width: 320px;
+            min-height: 100vh;
+            background: var(--bg);
+            color: var(--ink);
+            font-family: var(--font);
+            font-size: 15px;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        button, input, select, textarea { font: inherit; }
+        button, a { -webkit-tap-highlight-color: transparent; }
+
+        :focus-visible {
+            outline: none;
+            box-shadow: var(--focus);
+        }
+
+        .app-shell {
+            min-height: 100vh;
+            display: grid;
+            grid-template-columns: var(--sidebar) minmax(0, 1fr);
+        }
+
+        .sidebar {
+            position: fixed;
+            inset: 0 auto 0 0;
+            z-index: 20;
+            width: var(--sidebar);
+            display: flex;
+            flex-direction: column;
+            background: var(--surface);
+            border-right: 1px solid var(--line);
+        }
+
+        .brand {
+            min-height: 78px;
+            padding: 18px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-bottom: 1px solid var(--line);
+            text-decoration: none;
+            color: var(--ink-strong);
+        }
+
+        .brand-mark {
+            width: 38px;
+            height: 38px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 auto;
+            border-radius: 11px;
+            background: var(--primary-dark);
+            color: #fff;
+            font: 700 14px/1 var(--mono);
+        }
+
+        .brand-copy strong,
+        .brand-copy span { display: block; }
+        .brand-copy strong { font-size: 15px; line-height: 1.3; }
+        .brand-copy span { margin-top: 2px; color: var(--muted); font-size: 12px; }
+
+        .side-nav {
+            padding: 16px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .nav-label {
+            margin: 12px 10px 6px;
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .nav-link {
+            min-height: 42px;
+            padding: 8px 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-radius: 10px;
+            color: var(--muted);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 650;
+            transition: color 160ms ease, background-color 160ms ease;
+        }
+
+        .nav-link:hover { color: var(--ink); background: var(--surface-wash); }
+        .nav-link.active { color: var(--primary-ink); background: var(--surface-selected); }
+
+        .nav-icon {
+            width: 24px;
+            height: 24px;
+            display: grid;
+            place-items: center;
+            border-radius: 7px;
+            background: var(--surface-control);
+            font: 700 11px/1 var(--mono);
+        }
+
+        .nav-link.active .nav-icon { background: #D8EBED; }
+
+        .side-foot {
+            margin-top: auto;
+            padding: 16px 20px 20px;
+            border-top: 1px solid var(--line);
+        }
+
+        .side-foot p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+        .side-foot a { color: var(--primary-dark); font-weight: 700; }
+
+        .main {
+            grid-column: 2;
+            min-width: 0;
+        }
+
+        .topbar {
+            position: sticky;
+            top: 0;
+            z-index: 15;
+            height: 64px;
+            padding: 0 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            background: rgba(243, 247, 249, 0.96);
+            border-bottom: 1px solid rgba(217, 227, 232, 0.9);
+        }
+
+        .topbar-title { font-size: 14px; font-weight: 750; color: var(--ink-strong); }
+
+        .connection-pill {
+            min-height: 34px;
+            padding: 6px 11px;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            background: var(--surface);
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--line-strong);
+        }
+
+        .connection-pill.connected { color: var(--success); border-color: #B7D9C8; }
+        .connection-pill.connected .status-dot { background: var(--success); }
+        .connection-pill.error { color: var(--danger); border-color: #E8B9B5; }
+        .connection-pill.error .status-dot { background: var(--danger); }
+        .connection-pill.loading .status-dot { background: var(--warning); animation: breathe 1.1s ease-in-out infinite; }
+
+        @keyframes breathe { 50% { opacity: .35; transform: scale(.8); } }
+
+        .content {
+            width: min(1180px, calc(100% - 64px));
+            margin: 0 auto;
+            padding: 36px 0 80px;
+        }
+
+        .section { scroll-margin-top: 88px; margin-bottom: 52px; }
+
+        .section-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 24px;
+            margin-bottom: 20px;
+        }
+
+        .section-head h1,
+        .section-head h2 { margin: 0; color: var(--ink-strong); text-wrap: balance; }
+        .section-head h1 { font-size: 30px; line-height: 1.25; letter-spacing: -0.02em; }
+        .section-head h2 { font-size: 22px; line-height: 1.35; letter-spacing: -0.01em; }
+        .section-head p { max-width: 68ch; margin: 8px 0 0; color: var(--muted); }
+
+        .version-chip {
+            flex: 0 0 auto;
+            padding: 5px 10px;
+            border-radius: 999px;
+            background: var(--surface-selected);
+            color: var(--primary-ink);
+            font: 700 12px/1.5 var(--mono);
+        }
+
+        .intro-band {
+            min-height: 154px;
+            padding: 26px 28px;
+            display: grid;
+            grid-template-columns: minmax(0, 1.4fr) minmax(260px, .6fr);
+            gap: 32px;
+            align-items: center;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background: var(--surface);
+        }
+
+        .intro-band h1 { margin: 0; font-size: 30px; line-height: 1.25; color: var(--ink-strong); letter-spacing: -0.02em; }
+        .intro-band p { max-width: 68ch; margin: 10px 0 0; color: var(--muted); }
+
+        .base-url {
+            padding: 14px 16px;
+            border-radius: var(--radius);
+            background: var(--code-bg);
+            color: var(--code-ink);
+        }
+
+        .base-url span { display: block; margin-bottom: 6px; color: #9CB2BB; font-size: 11px; font-weight: 700; }
+        .base-url code { font: 600 13px/1.5 var(--mono); overflow-wrap: anywhere; }
+
+        .capability-row {
+            margin-top: 16px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .capability {
+            padding: 5px 9px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            background: var(--surface-wash);
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .split {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(320px, .86fr);
+            gap: 20px;
+            align-items: start;
+        }
+
+        .panel {
+            padding: 22px;
+            border: 1px solid var(--line);
+            border-radius: var(--radius-lg);
+            background: var(--surface);
+        }
+
+        .panel-title { margin: 0; color: var(--ink-strong); font-size: 17px; line-height: 1.35; }
+        .panel-desc { margin: 7px 0 18px; color: var(--muted); font-size: 14px; }
+
+        .field { margin-bottom: 16px; }
+        .field:last-child { margin-bottom: 0; }
+
+        .field label,
+        .field-label {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 7px;
+            color: var(--ink);
+            font-size: 13px;
+            font-weight: 750;
+        }
+
+        .field-hint { color: var(--muted); font-size: 11px; font-weight: 500; }
+        .field-help { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+
+        .input-wrap { position: relative; }
+
+        input, select, textarea {
+            width: 100%;
+            min-height: 44px;
+            padding: 10px 12px;
+            border: 1px solid var(--line-strong);
+            border-radius: var(--radius);
+            background: var(--surface);
+            color: var(--ink-strong);
+            transition: border-color 150ms ease, box-shadow 150ms ease;
+        }
+
+        input::placeholder, textarea::placeholder { color: #69798F; opacity: 1; }
+        input:hover, select:hover, textarea:hover { border-color: #94AAB4; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: var(--primary); box-shadow: var(--focus); }
+        textarea { min-height: 96px; resize: vertical; }
+
+        .secret-input { padding-right: 76px; font-family: var(--mono); font-size: 13px; }
+
+        .input-action {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            min-height: 32px;
+            padding: 4px 9px;
+            border: 0;
+            border-radius: 8px;
+            background: var(--surface-control);
+            color: var(--muted);
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 750;
+        }
+
+        .input-action:hover { color: var(--ink); background: #E3EBF1; }
+
+        .button-row { display: flex; flex-wrap: wrap; gap: 10px; }
+
+        .btn {
+            min-height: 44px;
+            padding: 9px 14px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            border: 1px solid transparent;
+            border-radius: var(--radius);
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 750;
+            transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease, transform 100ms ease;
+        }
+
+        .btn:active { transform: translateY(1px); }
+        .btn:disabled { cursor: not-allowed; opacity: .55; transform: none; }
+        .btn-primary { background: var(--primary-dark); color: #fff; }
+        .btn-primary:hover:not(:disabled) { background: #225D6D; }
+        .btn-secondary { border-color: var(--line); background: var(--surface); color: var(--ink); }
+        .btn-secondary:hover:not(:disabled) { background: var(--surface-wash); border-color: var(--line-strong); }
+        .btn-danger { border-color: #E8B9B5; background: var(--surface); color: var(--danger); }
+        .btn-danger:hover:not(:disabled) { background: var(--danger-soft); border-color: #D9958F; }
+        .btn-small { min-height: 34px; padding: 6px 10px; font-size: 12px; }
+
+        .secure-note {
+            padding: 14px 15px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            border-radius: var(--radius);
+            background: var(--info-soft);
+            color: #24477F;
+            font-size: 13px;
+        }
+
+        .note-symbol {
+            width: 22px;
+            height: 22px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 auto;
+            border-radius: 50%;
+            background: #D8E5FF;
+            color: var(--info);
+            font-weight: 800;
+        }
+
+        .key-manager-grid {
+            display: grid;
+            grid-template-columns: minmax(280px, .72fr) minmax(0, 1.28fr);
+            gap: 20px;
+            align-items: start;
+        }
+
+        .admin-gate {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }
+
+        .admin-gate strong { display: block; color: var(--ink-strong); }
+        .admin-gate p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+
+        .key-secret-result {
+            margin-top: 18px;
+            padding: 15px;
+            border: 1px solid #B7D9C8;
+            border-radius: var(--radius);
+            background: var(--success-soft);
+        }
+
+        .key-secret-result strong { color: var(--success); }
+        .key-secret-result p { margin: 4px 0 12px; color: #315E49; font-size: 12px; }
+        .key-secret-result input { background: var(--surface); font-family: var(--mono); font-size: 12px; }
+        .key-secret-actions { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
+
+        .key-list-head {
+            margin-bottom: 14px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .key-list-head .panel-desc { margin-bottom: 0; }
+        .key-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+        .key-table { width: 100%; border-collapse: collapse; min-width: 680px; }
+        .key-table th,
+        .key-table td { padding: 12px 13px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+        .key-table th { background: var(--surface-wash); color: var(--muted); font-size: 11px; font-weight: 800; }
+        .key-table td { color: var(--ink); font-size: 12px; }
+        .key-table tbody tr:last-child td { border-bottom: 0; }
+        .key-name { display: block; color: var(--ink-strong); font-weight: 750; }
+        .key-prefix { color: var(--muted); font: 11px/1.5 var(--mono); white-space: nowrap; }
+        .key-empty { padding: 28px 18px !important; text-align: center !important; color: var(--muted) !important; }
+        .status-tag { display: inline-flex; padding: 3px 7px; border-radius: 999px; font-size: 11px; font-weight: 750; }
+        .status-tag.active { background: var(--success-soft); color: var(--success); }
+        .status-tag.revoked { background: var(--surface-control); color: var(--muted); }
+        .manager-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; }
+
+        .endpoint-list { border-top: 1px solid var(--line); }
+
+        .endpoint-row {
+            padding: 15px 0;
+            display: grid;
+            grid-template-columns: 62px minmax(0, 1fr);
+            gap: 12px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .method {
+            align-self: start;
+            padding: 3px 7px;
+            border-radius: 7px;
+            text-align: center;
+            font: 800 11px/1.5 var(--mono);
+        }
+
+        .method.get { background: var(--success-soft); color: var(--success); }
+        .method.post { background: var(--info-soft); color: var(--info); }
+        .endpoint-path { display: block; color: var(--ink-strong); font: 650 12px/1.6 var(--mono); overflow-wrap: anywhere; }
+        .endpoint-desc { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 0 14px;
+        }
+
+        .session-bar {
+            margin: 16px 0;
+            padding: 11px 13px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            border-radius: var(--radius);
+            background: var(--surface-selected);
+            color: var(--primary-ink);
+            font-size: 12px;
+        }
+
+        .session-bar code { font: 650 11px/1.5 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .chat {
+            min-height: 300px;
+            max-height: 440px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            overflow: auto;
+            border: 1px solid var(--line);
+            border-radius: var(--radius);
+            background: var(--surface-wash);
+        }
+
+        .empty-chat {
+            margin: auto;
+            max-width: 300px;
+            text-align: center;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .bubble {
+            max-width: min(82%, 560px);
+            padding: 10px 12px;
+            border-radius: 12px;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .bubble.assistant { align-self: flex-start; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
+        .bubble.user { align-self: flex-end; background: var(--primary-dark); color: #fff; }
+        .bubble.system { align-self: center; padding: 5px 9px; background: var(--surface-control); color: var(--muted); font-size: 11px; }
+
+        .composer { margin-top: 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+        .composer input { min-height: 46px; }
+
+        .result-box {
+            min-height: 220px;
+            margin: 0;
+            padding: 16px;
+            overflow: auto;
+            border-radius: var(--radius);
+            background: var(--code-bg);
+            color: var(--code-ink);
+            font: 12px/1.65 var(--mono);
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .file-drop {
+            padding: 22px 16px;
+            border: 1px dashed #9DB2BC;
+            border-radius: var(--radius);
+            background: var(--surface-wash);
+            text-align: center;
+        }
+
+        .file-drop input { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; pointer-events: none; }
+        .file-drop label { display: inline-flex; cursor: pointer; color: var(--primary-dark); font-weight: 750; }
+        .file-name { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+
+        .code-panel { overflow: hidden; border-radius: var(--radius-lg); background: var(--code-bg); }
+
+        .code-toolbar {
+            min-height: 46px;
+            padding: 6px 8px 6px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            border-bottom: 1px solid #32444F;
+            color: #BFD0D7;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .code-tabs { display: flex; gap: 3px; }
+        .code-tab, .copy-btn {
+            min-height: 32px;
+            padding: 5px 9px;
+            border: 0;
+            border-radius: 8px;
+            background: transparent;
+            color: #BFD0D7;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .code-tab:hover, .copy-btn:hover { background: #273842; color: #fff; }
+        .code-tab.active { background: #314651; color: #fff; }
+
+        .code-block {
+            min-height: 260px;
+            margin: 0;
+            padding: 18px;
+            overflow: auto;
+            color: var(--code-ink);
+            font: 12px/1.7 var(--mono);
+            white-space: pre;
+        }
+
+        .callout {
+            padding: 16px;
+            display: grid;
+            grid-template-columns: 32px minmax(0, 1fr);
+            gap: 12px;
+            border-radius: var(--radius);
+            background: var(--warning-soft);
+            color: #70490C;
+        }
+
+        .callout strong { display: block; color: #5D3B08; }
+        .callout p { margin: 3px 0 0; font-size: 13px; }
+        .callout .note-symbol { background: #F4DDA2; color: #70490C; }
+
+        .toast {
+            position: fixed;
+            right: 22px;
+            bottom: 22px;
+            z-index: 40;
+            max-width: min(380px, calc(100vw - 32px));
+            padding: 12px 14px;
+            border-radius: var(--radius);
+            background: var(--ink-strong);
+            color: #fff;
+            font-size: 13px;
+            opacity: 0;
+            transform: translateY(8px);
+            pointer-events: none;
+            transition: opacity 160ms ease, transform 160ms ease;
+        }
+
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.error { background: var(--danger); }
+
+        .mobile-nav { display: none; }
+
+        @media (max-width: 920px) {
+            .app-shell { display: block; }
+            .sidebar { display: none; }
+            .main { min-width: 0; }
+            .topbar { padding: 0 18px; }
+            .content { width: min(100% - 32px, 760px); padding-top: 24px; }
+            .intro-band, .split, .key-manager-grid { grid-template-columns: 1fr; }
+            .mobile-nav {
+                position: sticky;
+                top: 64px;
+                z-index: 14;
+                display: flex;
+                gap: 4px;
+                padding: 8px 16px;
+                overflow-x: auto;
+                background: var(--surface);
+                border-bottom: 1px solid var(--line);
+            }
+            .mobile-nav a {
+                min-height: 36px;
+                padding: 7px 10px;
+                flex: 0 0 auto;
+                border-radius: 9px;
+                color: var(--muted);
+                text-decoration: none;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            .mobile-nav a.active { background: var(--surface-selected); color: var(--primary-ink); }
+            .section { scroll-margin-top: 122px; }
+        }
+
+        @media (max-width: 620px) {
+            .topbar { height: 58px; }
+            .topbar-title { font-size: 13px; }
+            .connection-pill { padding-inline: 9px; }
+            .mobile-nav { top: 58px; }
+            .content { width: calc(100% - 24px); padding-bottom: 48px; }
+            .section { margin-bottom: 38px; scroll-margin-top: 116px; }
+            .section-head { margin-bottom: 16px; }
+            .section-head h1, .intro-band h1 { font-size: 25px; }
+            .section-head h2 { font-size: 20px; }
+            .intro-band, .panel { padding: 18px; }
+            .form-grid { grid-template-columns: 1fr; }
+            .button-row .btn { flex: 1 1 auto; }
+            .admin-gate { align-items: flex-start; flex-direction: column; }
+            .composer { grid-template-columns: 1fr; }
+            .composer .btn { width: 100%; }
+            .bubble { max-width: 92%; }
+            .code-toolbar { align-items: flex-start; }
+            .code-tabs { overflow-x: auto; }
+            .code-block { min-height: 220px; padding: 15px; font-size: 11px; }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            html { scroll-behavior: auto; }
+            *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar" aria-label="开发者导航">
+            <a class="brand" href="#overview">
+                <span class="brand-mark">API</span>
+                <span class="brand-copy">
+                    <strong>记忆守护 API</strong>
+                    <span>开发者工作台</span>
+                </span>
+            </a>
+            <nav class="side-nav">
+                <span class="nav-label">开始使用</span>
+                <a class="nav-link active" href="#overview"><span class="nav-icon">01</span>概览</a>
+                <a class="nav-link" href="#connect"><span class="nav-icon">02</span>连接 API</a>
+                <a class="nav-link" href="#key-management"><span class="nav-icon">KEY</span>Key 管理</a>
+                <a class="nav-link" href="#playground"><span class="nav-icon">03</span>会话调试</a>
+                <a class="nav-link" href="#vision"><span class="nav-icon">04</span>视觉评估</a>
+                <span class="nav-label">参考</span>
+                <a class="nav-link" href="#examples"><span class="nav-icon">{ }</span>代码示例</a>
+                <a class="nav-link" href="#security"><span class="nav-icon">!</span>安全说明</a>
+            </nav>
+            <div class="side-foot">
+                <p>当前版本 v1<br><a href="/" target="_blank" rel="noopener">打开语音筛查网站</a></p>
+            </div>
+        </aside>
+
+        <main class="main">
+            <header class="topbar">
+                <div class="topbar-title">API 控制台</div>
+                <div class="connection-pill" id="connectionPill" role="status" aria-live="polite">
+                    <span class="status-dot" aria-hidden="true"></span>
+                    <span id="connectionText">尚未连接</span>
+                </div>
+            </header>
+
+            <nav class="mobile-nav" aria-label="移动端导航">
+                <a class="active" href="#overview">概览</a>
+                <a href="#connect">连接</a>
+                <a href="#key-management">密钥</a>
+                <a href="#playground">会话</a>
+                <a href="#vision">视觉</a>
+                <a href="#examples">示例</a>
+            </nav>
+
+            <div class="content">
+                <section class="section" id="overview">
+                    <div class="intro-band">
+                        <div>
+                            <h1>在这里完成第一次 API 调用</h1>
+                            <p>连接 API Key 后，可直接创建认知初筛会话、提交文本回答和测试视觉评估。所有请求均从当前浏览器直连你的服务。</p>
+                            <div class="capability-row" aria-label="API 能力">
+                                <span class="capability">文本初筛</span>
+                                <span class="capability">视觉评估</span>
+                                <span class="capability">会话状态</span>
+                                <span class="capability">Bearer 认证</span>
+                            </div>
+                        </div>
+                        <div class="base-url">
+                            <span>BASE URL</span>
+                            <code id="baseUrlDisplay"></code>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section" id="connect">
+                    <div class="section-head">
+                        <div>
+                            <h2>连接 API</h2>
+                            <p>API Key 只保存在当前标签页的 sessionStorage 中，关闭标签页后自动清除。</p>
+                        </div>
+                        <span class="version-chip">v1</span>
+                    </div>
+                    <div class="split">
+                        <div class="panel">
+                            <h3 class="panel-title">验证访问凭据</h3>
+                            <p class="panel-desc">输入管理员创建的调用方 Key、bootstrap Key，或环境变量中配置的 Key。</p>
+                            <div class="field">
+                                <label for="apiKey">API Key <span class="field-hint">Authorization: Bearer</span></label>
+                                <div class="input-wrap">
+                                    <input class="secret-input" id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="adsk_...">
+                                    <button class="input-action" id="toggleKey" type="button" aria-label="显示 API Key">显示</button>
+                                </div>
+                            </div>
+                            <div class="button-row">
+                                <button class="btn btn-primary" id="connectBtn" type="button">验证并连接</button>
+                                <button class="btn btn-secondary" id="clearKeyBtn" type="button">清除凭据</button>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="secure-note">
+                                <span class="note-symbol" aria-hidden="true">i</span>
+                                <div><strong>Key 不会写入网页代码</strong><br>这个页面不会展示服务器上的 Key，也不会将 Key 持久保存在浏览器中。请勿把 Key 放入公开前端项目或代码仓库。</div>
+                            </div>
+                            <div class="endpoint-list" aria-label="接口列表">
+                                <div class="endpoint-row">
+                                    <span class="method get">GET</span>
+                                    <div><code class="endpoint-path">/v1/health</code><span class="endpoint-desc">验证认证与服务状态</span></div>
+                                </div>
+                                <div class="endpoint-row">
+                                    <span class="method get">GET</span>
+                                    <div><code class="endpoint-path">/v1/context/variants</code><span class="endpoint-desc">查看可测试的上下文版本</span></div>
+                                </div>
+                                <div class="endpoint-row">
+                                    <span class="method post">POST</span>
+                                    <div><code class="endpoint-path">/v1/screening/sessions</code><span class="endpoint-desc">创建独立初筛会话</span></div>
+                                </div>
+                                <div class="endpoint-row">
+                                    <span class="method post">POST</span>
+                                    <div><code class="endpoint-path">/v1/screening/sessions/{id}/turn</code><span class="endpoint-desc">提交一轮文本回答</span></div>
+                                </div>
+                                <div class="endpoint-row">
+                                    <span class="method post">POST</span>
+                                    <div><code class="endpoint-path">/v1/vision/evaluate</code><span class="endpoint-desc">评估图片、视频或抽帧</span></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section" id="key-management">
+                    <div class="section-head">
+                        <div>
+                            <h2>API Key 管理</h2>
+                            <p>管理员可为不同网站或服务创建独立 Key，并随时撤销访问权限。</p>
+                        </div>
+                    </div>
+
+                    <div class="panel admin-gate" id="keyAdminGate" aria-live="polite">
+                        <div>
+                            <strong>正在检查管理员身份</strong>
+                            <p>Key 管理操作需要使用本站管理员账号。</p>
+                        </div>
+                    </div>
+
+                    <div class="key-manager-grid" id="keyManager" hidden>
+                        <div class="panel">
+                            <h3 class="panel-title">创建新 Key</h3>
+                            <p class="panel-desc">使用能识别调用方的名称，例如“官网生产环境”。</p>
+                            <form id="createKeyForm">
+                                <div class="field">
+                                    <label for="keyName">名称 <span class="field-hint">2–80 个字符</span></label>
+                                    <input id="keyName" type="text" minlength="2" maxlength="80" autocomplete="off" placeholder="例如：小程序生产环境" required>
+                                </div>
+                                <button class="btn btn-primary" id="createKeyBtn" type="submit">创建 API Key</button>
+                            </form>
+
+                            <div class="key-secret-result" id="keySecretResult" role="status" aria-live="polite" hidden>
+                                <strong>API Key 已创建</strong>
+                                <p>这是唯一一次显示完整 Key。请立即复制并保存到服务端环境变量。</p>
+                                <input id="newKeySecret" type="text" readonly spellcheck="false" aria-label="新创建的 API Key">
+                                <div class="key-secret-actions">
+                                    <button class="btn btn-primary btn-small" id="copyNewKeyBtn" type="button">复制 Key</button>
+                                    <button class="btn btn-secondary btn-small" id="useNewKeyBtn" type="button">用此 Key 连接</button>
+                                    <button class="btn btn-secondary btn-small" id="dismissNewKeyBtn" type="button">我已保存</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="panel">
+                            <div class="key-list-head">
+                                <div>
+                                    <h3 class="panel-title">已创建的 Key</h3>
+                                    <p class="panel-desc">仅显示前缀和使用时间，完整密钥无法恢复。</p>
+                                </div>
+                                <button class="btn btn-secondary btn-small" id="refreshKeysBtn" type="button">刷新</button>
+                            </div>
+                            <div class="key-table-wrap">
+                                <table class="key-table">
+                                    <thead>
+                                        <tr><th>名称与前缀</th><th>状态</th><th>创建时间</th><th>最近调用</th><th>操作</th></tr>
+                                    </thead>
+                                    <tbody id="keyRows">
+                                        <tr><td class="key-empty" colspan="5">正在加载…</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p class="manager-note">环境变量和 bootstrap Key 不会出现在此列表中。</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section" id="playground">
+                    <div class="section-head">
+                        <div>
+                            <h2>会话调试</h2>
+                            <p>先创建测试患者会话，再逐轮提交回答。会话默认在一小时无调用后过期。</p>
+                        </div>
+                    </div>
+                    <div class="split">
+                        <div class="panel">
+                            <h3 class="panel-title">创建筛查会话</h3>
+                            <p class="panel-desc">测试数据会写入当前项目数据库，请使用虚构信息进行调试。</p>
+                            <div class="form-grid">
+                                <div class="field">
+                                    <label for="patientName">姓名</label>
+                                    <input id="patientName" type="text" maxlength="80" placeholder="例如：测试患者">
+                                </div>
+                                <div class="field">
+                                    <label for="patientAge">年龄</label>
+                                    <input id="patientAge" type="number" min="0" max="150" inputmode="numeric" placeholder="70">
+                                </div>
+                                <div class="field">
+                                    <label for="patientGender">性别</label>
+                                    <select id="patientGender">
+                                        <option value="">不填写</option>
+                                        <option value="男">男</option>
+                                        <option value="女">女</option>
+                                        <option value="其他">其他</option>
+                                    </select>
+                                </div>
+                                <div class="field">
+                                    <label for="educationYears">受教育年限</label>
+                                    <input id="educationYears" type="number" min="0" max="40" inputmode="numeric" placeholder="9">
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label for="contextVariant">上下文方案 <span class="field-hint">会话创建后固定</span></label>
+                                <select id="contextVariant" disabled>
+                                    <option value="baseline">baseline（当前内置方案）</option>
+                                </select>
+                                <p class="field-help">连接 API 后会自动加载管理员允许的候选版本。使用同一份测试回答分别创建 baseline 和 candidate 会话，即可对比效果与延迟。</p>
+                            </div>
+                            <button class="btn btn-primary" id="createSessionBtn" type="button">创建测试会话</button>
+                            <div class="session-bar" id="sessionBar" hidden>
+                                <span>当前 Session · <strong id="sessionVariant">baseline</strong></span>
+                                <code id="sessionId">尚未创建</code>
+                            </div>
+                        </div>
+
+                        <div class="panel">
+                            <h3 class="panel-title">逐轮调用</h3>
+                            <p class="panel-desc">每条消息都会调用真实筛查 Agent，并产生上游模型费用。</p>
+                            <div class="chat" id="chat" aria-live="polite">
+                                <div class="empty-chat" id="emptyChat">创建会话后，在下方输入一条患者回答。</div>
+                            </div>
+                            <form class="composer" id="messageForm">
+                                <input id="messageInput" type="text" maxlength="4000" placeholder="输入患者回答" autocomplete="off" disabled>
+                                <button class="btn btn-primary" id="sendMessageBtn" type="submit" disabled>发送回答</button>
+                            </form>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section" id="vision">
+                    <div class="section-head">
+                        <div>
+                            <h2>视觉评估</h2>
+                            <p>选择任务并上传测试图片。文件会在浏览器内转为 base64，再发送到视觉评估接口。</p>
+                        </div>
+                    </div>
+                    <div class="split">
+                        <div class="panel">
+                            <div class="field">
+                                <label for="visionTask">评估任务</label>
+                                <select id="visionTask">
+                                    <option value="copy_pentagons">临摹相交五边形</option>
+                                    <option value="language_writing_sentence">手写完整句子</option>
+                                    <option value="language_3step_action">三步动作</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <span class="field-label">测试图片 <span class="field-hint">建议小于 8 MB</span></span>
+                                <div class="file-drop">
+                                    <input id="visionFile" type="file" accept="image/*">
+                                    <label for="visionFile">选择一张图片</label>
+                                    <p class="file-name" id="fileName">尚未选择文件</p>
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label for="visionContext">补充说明</label>
+                                <textarea id="visionContext" maxlength="4000" placeholder="可选，描述患者正在完成的任务"></textarea>
+                            </div>
+                            <button class="btn btn-primary" id="evaluateBtn" type="button">开始视觉评估</button>
+                        </div>
+                        <div class="panel">
+                            <h3 class="panel-title">响应结果</h3>
+                            <p class="panel-desc">接口响应会以格式化 JSON 显示。</p>
+                            <pre class="result-box" id="visionResult">{
+  "status": "等待调用"
+}</pre>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="section" id="examples">
+                    <div class="section-head">
+                        <div>
+                            <h2>代码示例</h2>
+                            <p>示例不会填入你当前输入的真实 Key，复制后请从安全的环境变量中读取。</p>
+                        </div>
+                    </div>
+                    <div class="code-panel">
+                        <div class="code-toolbar">
+                            <div class="code-tabs" role="tablist" aria-label="代码语言">
+                                <button class="code-tab active" type="button" data-lang="curl" role="tab" aria-selected="true">cURL</button>
+                                <button class="code-tab" type="button" data-lang="javascript" role="tab" aria-selected="false">JavaScript</button>
+                                <button class="code-tab" type="button" data-lang="python" role="tab" aria-selected="false">Python</button>
+                            </div>
+                            <button class="copy-btn" id="copyCodeBtn" type="button">复制代码</button>
+                        </div>
+                        <pre class="code-block"><code id="codeContent"></code></pre>
+                    </div>
+                </section>
+
+                <section class="section" id="security">
+                    <div class="section-head">
+                        <div>
+                            <h2>上线前检查</h2>
+                            <p>API 已具备 Key 校验和单 Key 限流。正式提供给其他调用方前，还需要明确配额、数据处理和费用承担方式。</p>
+                        </div>
+                    </div>
+                    <div class="callout">
+                        <span class="note-symbol" aria-hidden="true">!</span>
+                        <div>
+                            <strong>这是一项认知初筛辅助能力</strong>
+                            <p>不要将接口输出作为医疗诊断结论。患者资料和评估结果属于敏感数据，请仅提供给获授权的系统，并为不同调用方设置独立 API Key。</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script>
+        (() => {
+            const BASE_URL = window.location.origin;
+            document.getElementById('baseUrlDisplay').textContent = BASE_URL;
+            const state = {
+                apiKey: sessionStorage.getItem('memory-api-key') || '',
+                sessionId: '',
+                visionBase64: '',
+                codeLang: 'curl'
+            };
+
+            const $ = (id) => document.getElementById(id);
+            const elements = {
+                apiKey: $('apiKey'),
+                connectBtn: $('connectBtn'),
+                clearKeyBtn: $('clearKeyBtn'),
+                toggleKey: $('toggleKey'),
+                connectionPill: $('connectionPill'),
+                connectionText: $('connectionText'),
+                keyAdminGate: $('keyAdminGate'),
+                keyManager: $('keyManager'),
+                createKeyForm: $('createKeyForm'),
+                keyName: $('keyName'),
+                createKeyBtn: $('createKeyBtn'),
+                keySecretResult: $('keySecretResult'),
+                newKeySecret: $('newKeySecret'),
+                copyNewKeyBtn: $('copyNewKeyBtn'),
+                useNewKeyBtn: $('useNewKeyBtn'),
+                dismissNewKeyBtn: $('dismissNewKeyBtn'),
+                refreshKeysBtn: $('refreshKeysBtn'),
+                keyRows: $('keyRows'),
+                createSessionBtn: $('createSessionBtn'),
+                contextVariant: $('contextVariant'),
+                sessionBar: $('sessionBar'),
+                sessionId: $('sessionId'),
+                sessionVariant: $('sessionVariant'),
+                messageForm: $('messageForm'),
+                messageInput: $('messageInput'),
+                sendMessageBtn: $('sendMessageBtn'),
+                chat: $('chat'),
+                emptyChat: $('emptyChat'),
+                visionFile: $('visionFile'),
+                fileName: $('fileName'),
+                evaluateBtn: $('evaluateBtn'),
+                visionResult: $('visionResult'),
+                codeContent: $('codeContent'),
+                copyCodeBtn: $('copyCodeBtn'),
+                toast: $('toast')
+            };
+
+            const codeSamples = {
+                curl: `API_KEY="$MEMORY_API_KEY"
+
+curl -X POST "${BASE_URL}/v1/screening/sessions" \\
+  -H "Authorization: Bearer $API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "context_variant": "baseline",
+    "patient": {
+      "name": "测试患者",
+      "age": 70,
+      "gender": "男",
+      "education_years": 9
+    }
+  }'`,
+                javascript: `const response = await fetch(
+  '${BASE_URL}/v1/screening/sessions',
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': \`Bearer \${process.env.MEMORY_API_KEY}\`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      context_variant: 'baseline',
+      patient: {
+        name: '测试患者',
+        age: 70,
+        gender: '男',
+        education_years: 9
+      }
+    })
+  }
+);
+
+const data = await response.json();`,
+                python: `import os
+import requests
+
+response = requests.post(
+    '${BASE_URL}/v1/screening/sessions',
+    headers={
+        'Authorization': f'Bearer {os.environ["MEMORY_API_KEY"]}'
+    },
+    json={
+        'context_variant': 'baseline',
+        'patient': {
+            'name': '测试患者',
+            'age': 70,
+            'gender': '男',
+            'education_years': 9,
+        }
+    },
+    timeout=30,
+)
+response.raise_for_status()
+print(response.json())`
+            };
+
+            function toast(message, isError = false) {
+                elements.toast.textContent = message;
+                elements.toast.classList.toggle('error', isError);
+                elements.toast.classList.add('show');
+                clearTimeout(toast.timer);
+                toast.timer = setTimeout(() => elements.toast.classList.remove('show'), 2600);
+            }
+
+            function setConnection(status, label) {
+                elements.connectionPill.classList.remove('connected', 'error', 'loading');
+                if (status) elements.connectionPill.classList.add(status);
+                elements.connectionText.textContent = label;
+            }
+
+            function getApiKey() {
+                const value = elements.apiKey.value.trim();
+                if (!value) throw new Error('请先输入 API Key');
+                return value;
+            }
+
+            async function apiFetch(path, options = {}) {
+                const apiKey = getApiKey();
+                const headers = new Headers(options.headers || {});
+                headers.set('Authorization', `Bearer ${apiKey}`);
+                if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+                const response = await fetch(path, { ...options, headers });
+                let data;
+                try { data = await response.json(); }
+                catch (_) { data = { detail: `HTTP ${response.status}` }; }
+                if (!response.ok) {
+                    const detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data);
+                    throw new Error(detail || `请求失败 (${response.status})`);
+                }
+                return data;
+            }
+
+            async function adminFetch(path, options = {}) {
+                const headers = new Headers(options.headers || {});
+                if (options.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+                const response = await fetch(path, { ...options, headers, credentials: 'same-origin' });
+                let data;
+                try { data = await response.json(); }
+                catch (_) { data = { detail: `HTTP ${response.status}` }; }
+                if (!response.ok) {
+                    const detail = data.detail || data.error || `HTTP ${response.status}`;
+                    const error = new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+                    error.status = response.status;
+                    throw error;
+                }
+                return data;
+            }
+
+            function showKeyGate(title, message, withLogin = false) {
+                elements.keyAdminGate.replaceChildren();
+                const copy = document.createElement('div');
+                const heading = document.createElement('strong');
+                const text = document.createElement('p');
+                heading.textContent = title;
+                text.textContent = message;
+                copy.append(heading, text);
+                elements.keyAdminGate.appendChild(copy);
+                if (withLogin) {
+                    const link = document.createElement('a');
+                    link.className = 'btn btn-primary';
+                    link.href = '/login?next=/developers';
+                    link.textContent = '管理员登录';
+                    elements.keyAdminGate.appendChild(link);
+                }
+                elements.keyAdminGate.hidden = false;
+                elements.keyManager.hidden = true;
+            }
+
+            function formatDate(value) {
+                if (!value) return '尚未调用';
+                const date = new Date(value);
+                if (Number.isNaN(date.getTime())) return String(value);
+                return new Intl.DateTimeFormat('zh-CN', {
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit'
+                }).format(date);
+            }
+
+            function appendCell(row, text) {
+                const cell = document.createElement('td');
+                cell.textContent = text;
+                row.appendChild(cell);
+                return cell;
+            }
+
+            function renderKeys(keys) {
+                elements.keyRows.replaceChildren();
+                if (!keys.length) {
+                    const row = document.createElement('tr');
+                    const cell = appendCell(row, '还没有管理型 API Key，请先创建一个。');
+                    cell.className = 'key-empty';
+                    cell.colSpan = 5;
+                    elements.keyRows.appendChild(row);
+                    return;
+                }
+
+                keys.forEach((key) => {
+                    const row = document.createElement('tr');
+                    const identity = document.createElement('td');
+                    const name = document.createElement('span');
+                    const prefix = document.createElement('span');
+                    name.className = 'key-name';
+                    name.textContent = key.name || '未命名 Key';
+                    prefix.className = 'key-prefix';
+                    prefix.textContent = key.key_prefix || '—';
+                    identity.append(name, prefix);
+                    row.appendChild(identity);
+
+                    const statusCell = document.createElement('td');
+                    const status = document.createElement('span');
+                    const revoked = Boolean(key.revoked_at);
+                    status.className = `status-tag ${revoked ? 'revoked' : 'active'}`;
+                    status.textContent = revoked ? '已撤销' : '有效';
+                    statusCell.appendChild(status);
+                    row.appendChild(statusCell);
+                    appendCell(row, formatDate(key.created_at));
+                    appendCell(row, key.last_used_at ? formatDate(key.last_used_at) : '尚未调用');
+
+                    const actionCell = document.createElement('td');
+                    if (!revoked) {
+                        const revoke = document.createElement('button');
+                        revoke.className = 'btn btn-danger btn-small';
+                        revoke.type = 'button';
+                        revoke.textContent = '撤销';
+                        revoke.addEventListener('click', () => revokeKey(key));
+                        actionCell.appendChild(revoke);
+                    } else {
+                        actionCell.textContent = '—';
+                    }
+                    row.appendChild(actionCell);
+                    elements.keyRows.appendChild(row);
+                });
+            }
+
+            async function loadKeys() {
+                elements.refreshKeysBtn.disabled = true;
+                try {
+                    const data = await adminFetch('/api/admin/public-api-keys');
+                    renderKeys(Array.isArray(data.keys) ? data.keys : []);
+                } catch (error) {
+                    renderKeys([]);
+                    toast(`无法加载 Key：${error.message}`, true);
+                } finally {
+                    elements.refreshKeysBtn.disabled = false;
+                }
+            }
+
+            async function loadKeyManagement() {
+                try {
+                    const data = await adminFetch('/api/auth/me');
+                    if (!data.user || data.user.role !== 'admin') {
+                        showKeyGate('当前账号没有管理权限', '请使用管理员账号登录后再创建或撤销 API Key。', true);
+                        return;
+                    }
+                    elements.keyAdminGate.hidden = true;
+                    elements.keyManager.hidden = false;
+                    await loadKeys();
+                } catch (error) {
+                    if (error.status === 401) {
+                        showKeyGate('登录后即可创建 API Key', '为保护调用权限，只有管理员可以进入此区域。', true);
+                    } else {
+                        showKeyGate('暂时无法加载 Key 管理', error.message || '请稍后刷新页面重试。');
+                    }
+                }
+            }
+
+            async function createManagedKey(event) {
+                event.preventDefault();
+                const name = elements.keyName.value.trim();
+                if (name.length < 2) {
+                    toast('Key 名称至少需要 2 个字符', true);
+                    elements.keyName.focus();
+                    return;
+                }
+                elements.createKeyBtn.disabled = true;
+                elements.createKeyBtn.textContent = '正在创建';
+                try {
+                    const data = await adminFetch('/api/admin/public-api-keys', {
+                        method: 'POST',
+                        body: JSON.stringify({ name })
+                    });
+                    elements.newKeySecret.value = data.api_key;
+                    elements.keySecretResult.hidden = false;
+                    elements.keyName.value = '';
+                    await loadKeys();
+                    elements.newKeySecret.focus();
+                    elements.newKeySecret.select();
+                    toast('API Key 已创建，请立即保存');
+                } catch (error) {
+                    toast(error.message === 'INVALID_KEY_NAME' ? 'Key 名称应为 2–80 个字符' : error.message, true);
+                } finally {
+                    elements.createKeyBtn.disabled = false;
+                    elements.createKeyBtn.textContent = '创建 API Key';
+                }
+            }
+
+            function dismissNewKey() {
+                elements.newKeySecret.value = '';
+                elements.keySecretResult.hidden = true;
+                elements.keyName.focus();
+            }
+
+            async function copyNewKey() {
+                if (!elements.newKeySecret.value) return;
+                try {
+                    await navigator.clipboard.writeText(elements.newKeySecret.value);
+                    toast('API Key 已复制');
+                } catch (_) {
+                    elements.newKeySecret.focus();
+                    elements.newKeySecret.select();
+                    toast('浏览器未允许复制，请手动复制', true);
+                }
+            }
+
+            function useNewKey() {
+                if (!elements.newKeySecret.value) return;
+                elements.apiKey.value = elements.newKeySecret.value;
+                document.getElementById('connect').scrollIntoView({ behavior: 'smooth' });
+                toast('已填入连接区域，请点击“验证并连接”');
+            }
+
+            async function revokeKey(key) {
+                if (!window.confirm(`确定撤销“${key.name}”吗？撤销后使用此 Key 的调用会立即失败。`)) return;
+                try {
+                    await adminFetch(`/api/admin/public-api-keys/${encodeURIComponent(key.key_id)}`, { method: 'DELETE' });
+                    await loadKeys();
+                    toast('API Key 已撤销');
+                } catch (error) {
+                    toast(error.message, true);
+                }
+            }
+
+            async function connect() {
+                try {
+                    elements.connectBtn.disabled = true;
+                    elements.connectBtn.textContent = '正在验证';
+                    setConnection('loading', '正在验证');
+                    const data = await apiFetch('/v1/health');
+                    state.apiKey = elements.apiKey.value.trim();
+                    sessionStorage.setItem('memory-api-key', state.apiKey);
+                    populateContextVariants(data.context_variants, data.default_context_variant);
+                    setConnection('connected', data.status === 'ok' ? 'API 已连接' : '连接异常');
+                    toast('API Key 验证成功');
+                } catch (error) {
+                    setConnection('error', '连接失败');
+                    toast(error.message === 'INVALID_API_KEY' ? 'API Key 无效' : error.message, true);
+                } finally {
+                    elements.connectBtn.disabled = false;
+                    elements.connectBtn.textContent = '验证并连接';
+                }
+            }
+
+            function clearCredentials() {
+                state.apiKey = '';
+                state.sessionId = '';
+                sessionStorage.removeItem('memory-api-key');
+                elements.apiKey.value = '';
+                elements.sessionBar.hidden = true;
+                elements.contextVariant.replaceChildren();
+                const baselineOption = document.createElement('option');
+                baselineOption.value = 'baseline';
+                baselineOption.textContent = 'baseline（当前内置方案）';
+                elements.contextVariant.appendChild(baselineOption);
+                elements.contextVariant.disabled = true;
+                elements.messageInput.disabled = true;
+                elements.sendMessageBtn.disabled = true;
+                setConnection('', '尚未连接');
+                toast('已清除当前标签页中的凭据');
+            }
+
+            function optionalNumber(id) {
+                const value = $(id).value.trim();
+                return value === '' ? undefined : Number(value);
+            }
+
+            function populateContextVariants(variants, defaultVariant = 'baseline') {
+                const allowed = Array.isArray(variants) && variants.length ? variants : ['baseline'];
+                const previous = elements.contextVariant.value;
+                elements.contextVariant.replaceChildren();
+                [...new Set(allowed)].forEach((variant) => {
+                    const option = document.createElement('option');
+                    option.value = variant;
+                    option.textContent = variant === 'baseline'
+                        ? 'baseline（当前内置方案）'
+                        : `${variant}（候选方案）`;
+                    elements.contextVariant.appendChild(option);
+                });
+                const preferred = allowed.includes(previous) ? previous : defaultVariant;
+                elements.contextVariant.value = allowed.includes(preferred) ? preferred : allowed[0];
+                elements.contextVariant.disabled = false;
+            }
+
+            async function createSession() {
+                try {
+                    elements.createSessionBtn.disabled = true;
+                    elements.createSessionBtn.textContent = '正在创建';
+                    const patient = {
+                        name: $('patientName').value.trim() || undefined,
+                        age: optionalNumber('patientAge'),
+                        gender: $('patientGender').value || undefined,
+                        education_years: optionalNumber('educationYears')
+                    };
+                    Object.keys(patient).forEach((key) => patient[key] === undefined && delete patient[key]);
+                    const data = await apiFetch('/v1/screening/sessions', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            context_variant: elements.contextVariant.value || 'baseline',
+                            patient
+                        })
+                    });
+                    state.sessionId = data.session_id;
+                    elements.sessionId.textContent = data.session_id;
+                    elements.sessionVariant.textContent = data.context_variant || elements.contextVariant.value;
+                    elements.sessionBar.hidden = false;
+                    elements.messageInput.disabled = false;
+                    elements.sendMessageBtn.disabled = false;
+                    elements.emptyChat.hidden = true;
+                    elements.chat.replaceChildren();
+                    appendBubble('system', `会话已创建 · 上下文 ${data.context_variant || 'baseline'}`);
+                    elements.messageInput.focus();
+                    toast('测试会话创建成功');
+                } catch (error) {
+                    toast(error.message, true);
+                } finally {
+                    elements.createSessionBtn.disabled = false;
+                    elements.createSessionBtn.textContent = '创建测试会话';
+                }
+            }
+
+            function appendBubble(role, text) {
+                const bubble = document.createElement('div');
+                bubble.className = `bubble ${role}`;
+                bubble.textContent = text;
+                elements.chat.appendChild(bubble);
+                elements.chat.scrollTop = elements.chat.scrollHeight;
+                return bubble;
+            }
+
+            async function sendMessage(event) {
+                event.preventDefault();
+                const message = elements.messageInput.value.trim();
+                if (!state.sessionId || !message) return;
+                appendBubble('user', message);
+                elements.messageInput.value = '';
+                elements.messageInput.disabled = true;
+                elements.sendMessageBtn.disabled = true;
+                elements.sendMessageBtn.textContent = '处理中';
+                const pending = appendBubble('system', 'Agent 正在处理');
+                try {
+                    const data = await apiFetch(`/v1/screening/sessions/${encodeURIComponent(state.sessionId)}/turn`, {
+                        method: 'POST',
+                        body: JSON.stringify({ message, emotion: 'neutral' })
+                    });
+                    pending.remove();
+                    appendBubble('assistant', data.response || '接口未返回文本');
+                    const diagnostics = data.context_diagnostics;
+                    if (diagnostics) {
+                        const status = diagnostics.fallback
+                            ? '已自动回退 baseline'
+                            : diagnostics.status === 'cache_hit' ? '命中缓存' : '正常';
+                        appendBubble(
+                            'system',
+                            `上下文 ${data.context_variant || 'baseline'} · ${diagnostics.latency_ms || 0} ms · ${status}`
+                        );
+                    }
+                } catch (error) {
+                    pending.textContent = `调用失败：${error.message}`;
+                    toast(error.message, true);
+                } finally {
+                    elements.messageInput.disabled = false;
+                    elements.sendMessageBtn.disabled = false;
+                    elements.sendMessageBtn.textContent = '发送回答';
+                    elements.messageInput.focus();
+                }
+            }
+
+            function readAsBase64(file) {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+                    reader.onerror = () => reject(new Error('无法读取文件'));
+                    reader.readAsDataURL(file);
+                });
+            }
+
+            async function handleFile() {
+                const file = elements.visionFile.files[0];
+                if (!file) return;
+                if (file.size > 8 * 1024 * 1024) {
+                    elements.visionFile.value = '';
+                    elements.fileName.textContent = '文件过大，请选择 8 MB 以内的图片';
+                    state.visionBase64 = '';
+                    toast('图片文件不能超过 8 MB', true);
+                    return;
+                }
+                elements.fileName.textContent = `${file.name} · ${(file.size / 1024).toFixed(0)} KB`;
+                state.visionBase64 = await readAsBase64(file);
+            }
+
+            async function evaluateVision() {
+                if (!state.visionBase64) {
+                    toast('请先选择一张测试图片', true);
+                    return;
+                }
+                try {
+                    elements.evaluateBtn.disabled = true;
+                    elements.evaluateBtn.textContent = '正在评估';
+                    elements.visionResult.textContent = JSON.stringify({ status: 'processing' }, null, 2);
+                    const data = await apiFetch('/v1/vision/evaluate', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            task_id: $('visionTask').value,
+                            image: state.visionBase64,
+                            context: $('visionContext').value.trim()
+                        })
+                    });
+                    elements.visionResult.textContent = JSON.stringify(data, null, 2);
+                    toast('视觉评估完成');
+                } catch (error) {
+                    elements.visionResult.textContent = JSON.stringify({ error: error.message }, null, 2);
+                    toast(error.message, true);
+                } finally {
+                    elements.evaluateBtn.disabled = false;
+                    elements.evaluateBtn.textContent = '开始视觉评估';
+                }
+            }
+
+            function updateCode(lang) {
+                state.codeLang = lang;
+                elements.codeContent.textContent = codeSamples[lang];
+                document.querySelectorAll('.code-tab').forEach((tab) => {
+                    const active = tab.dataset.lang === lang;
+                    tab.classList.toggle('active', active);
+                    tab.setAttribute('aria-selected', String(active));
+                });
+            }
+
+            async function copyCode() {
+                try {
+                    await navigator.clipboard.writeText(codeSamples[state.codeLang]);
+                    toast('代码已复制');
+                } catch (_) {
+                    toast('浏览器未允许复制，请手动选择代码', true);
+                }
+            }
+
+            function syncNavigation() {
+                const sections = [...document.querySelectorAll('.section')];
+                const links = [...document.querySelectorAll('.nav-link, .mobile-nav a')];
+                const observer = new IntersectionObserver((entries) => {
+                    const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+                    if (!visible) return;
+                    links.forEach((link) => link.classList.toggle('active', link.getAttribute('href') === `#${visible.target.id}`));
+                }, { rootMargin: '-20% 0px -65% 0px', threshold: [0, .2, .6] });
+                sections.forEach((section) => observer.observe(section));
+            }
+
+            elements.apiKey.value = state.apiKey;
+            elements.connectBtn.addEventListener('click', connect);
+            elements.clearKeyBtn.addEventListener('click', clearCredentials);
+            elements.toggleKey.addEventListener('click', () => {
+                const showing = elements.apiKey.type === 'text';
+                elements.apiKey.type = showing ? 'password' : 'text';
+                elements.toggleKey.textContent = showing ? '显示' : '隐藏';
+                elements.toggleKey.setAttribute('aria-label', showing ? '显示 API Key' : '隐藏 API Key');
+            });
+            elements.apiKey.addEventListener('keydown', (event) => event.key === 'Enter' && connect());
+            elements.createKeyForm.addEventListener('submit', createManagedKey);
+            elements.copyNewKeyBtn.addEventListener('click', copyNewKey);
+            elements.useNewKeyBtn.addEventListener('click', useNewKey);
+            elements.dismissNewKeyBtn.addEventListener('click', dismissNewKey);
+            elements.refreshKeysBtn.addEventListener('click', loadKeys);
+            elements.createSessionBtn.addEventListener('click', createSession);
+            elements.messageForm.addEventListener('submit', sendMessage);
+            elements.visionFile.addEventListener('change', () => handleFile().catch((error) => toast(error.message, true)));
+            elements.evaluateBtn.addEventListener('click', evaluateVision);
+            document.querySelectorAll('.code-tab').forEach((tab) => tab.addEventListener('click', () => updateCode(tab.dataset.lang)));
+            elements.copyCodeBtn.addEventListener('click', copyCode);
+
+            updateCode('curl');
+            syncNavigation();
+            loadKeyManagement();
+            if (state.apiKey) connect();
+        })();
+    </script>
+</body>
+</html>

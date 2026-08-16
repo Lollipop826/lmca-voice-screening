@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>摄像头 & 视觉评估 测试</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
+  h1 { text-align: center; margin-bottom: 20px; font-size: 1.5rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 1100px; margin: 0 auto; }
+  .card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
+  .card h2 { font-size: 1.1rem; margin-bottom: 12px; color: #38bdf8; }
+  video, canvas { width: 100%; border-radius: 8px; background: #000; }
+  .btn { display: inline-block; padding: 8px 16px; border-radius: 8px; border: none; font-size: 0.9rem; cursor: pointer; margin: 4px; transition: all .2s; }
+  .btn-blue { background: #2563eb; color: #fff; } .btn-blue:hover { background: #1d4ed8; }
+  .btn-green { background: #16a34a; color: #fff; } .btn-green:hover { background: #15803d; }
+  .btn-red { background: #dc2626; color: #fff; } .btn-red:hover { background: #b91c1c; }
+  .btn-yellow { background: #ca8a04; color: #fff; } .btn-yellow:hover { background: #a16207; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  #log { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px; height: 200px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 0.8rem; line-height: 1.5; white-space: pre-wrap; }
+  .log-ok { color: #4ade80; } .log-err { color: #f87171; } .log-info { color: #38bdf8; } .log-warn { color: #facc15; }
+  .img-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .img-grid img { width: 100%; border-radius: 8px; border: 1px solid #475569; background: #fff; cursor: pointer; transition: transform .2s; }
+  .img-grid img:hover { transform: scale(1.05); }
+  .img-label { text-align: center; font-size: 0.8rem; color: #94a3b8; margin-top: 4px; }
+  .status { padding: 6px 12px; border-radius: 6px; display: inline-block; margin: 8px 0; font-size: 0.85rem; }
+  .status-ok { background: #166534; color: #4ade80; }
+  .status-err { background: #7f1d1d; color: #fca5a5; }
+  .status-wait { background: #713f12; color: #fde047; }
+  .result-box { background: #0f172a; border: 1px solid #334155; border-radius: 8px; padding: 12px; margin-top: 10px; font-size: 0.85rem; min-height: 60px; }
+  .full-width { grid-column: 1 / -1; }
+  #captured-frame { max-width: 320px; border-radius: 8px; border: 1px solid #475569; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<h1>📹 摄像头 & 视觉评估 测试工具</h1>
+<div style="max-width:1100px; margin:0 auto 16px auto; background:#0f172a; border:1px solid #334155; border-radius:12px; padding:14px 16px; color:#cbd5e1; line-height:1.7;">
+  <div style="font-weight:700; color:#7dd3fc; margin-bottom:6px;">🧾 三步动作独立 Demo</div>
+  <div style="font-size:0.9rem;">
+    如果你只想单独测试 MMSE 三步动作，不想走完整系统流程，可以直接打开：
+    <a href="/demo/3step-action" target="_blank" style="color:#38bdf8;">/demo/3step-action</a>
+  </div>
+</div>
+
+<div class="grid">
+
+  <!-- 摄像头测试 -->
+  <div class="card">
+    <h2>1. 摄像头测试</h2>
+    <video id="preview" autoplay playsinline muted></video>
+    <div style="margin-top:10px;">
+      <button class="btn btn-blue" onclick="openCamera()">🎥 打开摄像头</button>
+      <button class="btn btn-red" onclick="closeCamera()">⏹ 关闭摄像头</button>
+    </div>
+    <div id="camera-status" class="status status-wait">⏳ 未测试</div>
+    <div style="margin-top:8px; font-size:0.8rem; color:#94a3b8;">
+      测试 navigator.mediaDevices.getUserMedia 是否可用。<br>
+      远程服务器通常没有物理摄像头，此项预期会失败。
+    </div>
+  </div>
+
+  <!-- 录像测试 -->
+  <div class="card">
+    <h2>2. 录像测试 (视频+截帧)</h2>
+    <div>
+      <label style="font-size:0.85rem;">录像时长：</label>
+      <select id="record-duration" style="background:#0f172a; color:#e2e8f0; border:1px solid #475569; border-radius:4px; padding:4px 8px;">
+        <option value="3000">3秒</option>
+        <option value="5000" selected>5秒</option>
+        <option value="10000">10秒 (三步动作推荐)</option>
+      </select>
+    </div>
+    <div style="margin-top:8px;">
+      <button class="btn btn-green" id="btn-record" onclick="startHybridRecord()">� 开始录像+截帧</button>
+      <button class="btn btn-yellow" onclick="captureFrame()">📸 仅截一帧</button>
+    </div>
+    <div id="record-status" class="status status-wait">⏳ 未录像</div>
+    <video id="recorded-video" controls style="display:none; max-height:200px; margin-top:8px;"></video>
+    <canvas id="captured-frame" style="display:none;"></canvas>
+    <div id="frame-info" class="result-box">点击上方按钮开始录像...</div>
+  </div>
+
+  <!-- MMSE 图片检查 -->
+  <div class="card">
+    <h2>3. MMSE 图片检查</h2>
+    <p style="font-size:0.85rem; color:#94a3b8; margin-bottom:10px;">检查图片是否正常加载（不是乱码）：</p>
+    <div class="img-grid">
+      <div>
+        <img id="img-watch" src="/api/mmse-image/watch" alt="手表" onerror="this.style.border='2px solid red'; this.alt='加载失败'">
+        <div class="img-label">watch (手表)</div>
+      </div>
+      <div>
+        <img id="img-pencil" src="/api/mmse-image/pencil" alt="铅笔" onerror="this.style.border='2px solid red'; this.alt='加载失败'">
+        <div class="img-label">pencil (铅笔)</div>
+      </div>
+      <div>
+        <img id="img-close" src="/api/mmse-image/close_eyes" alt="闭上眼睛" onerror="this.style.border='2px solid red'; this.alt='加载失败'">
+        <div class="img-label">close_eyes (闭上眼睛)</div>
+      </div>
+      <div>
+        <img id="img-penta" src="/api/mmse-image/pentagons" alt="五边形" onerror="this.style.border='2px solid red'; this.alt='加载失败'">
+        <div class="img-label">pentagons (五边形)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 视觉评估 API 测试 -->
+  <div class="card">
+    <h2>4. 视觉评估 API 测试</h2>
+    <p style="font-size:0.85rem; color:#94a3b8; margin-bottom:10px;">使用摄像头帧或测试图片调用 /api/vision-evaluate</p>
+    <div>
+      <label style="font-size:0.85rem;">任务ID：</label>
+      <select id="test-task-id" style="background:#0f172a; color:#e2e8f0; border:1px solid #475569; border-radius:4px; padding:4px 8px;">
+        <option value="language_3step_action">language_3step_action (三步动作)</option>
+        <option value="language_reading_close_eyes">language_reading_close_eyes (闭眼)</option>
+        <option value="language_naming_watch">language_naming_watch (命名手表)</option>
+        <option value="language_naming_pencil">language_naming_pencil (命名铅笔)</option>
+      </select>
+    </div>
+    <div style="margin-top:8px;">
+      <button class="btn btn-green" id="btn-eval" onclick="testEvalWithRecording()" disabled>🔍 用录像测试评估 (视频优先)</button>
+      <button class="btn btn-blue" onclick="testEvalWithDummy()">🧪 用空数据测试API可达性</button>
+    </div>
+    <div id="eval-result" class="result-box">评估结果将显示在这里...</div>
+  </div>
+
+  <!-- WebSocket 连接测试 -->
+  <div class="card">
+    <h2>5. WebSocket 测试</h2>
+    <button class="btn btn-blue" onclick="testWebSocket()">🔌 测试 WS 连接</button>
+    <button class="btn btn-yellow" onclick="sendVisionCapture()">📹 模拟 vision_capture</button>
+    <div id="ws-status" class="status status-wait">⏳ 未测试</div>
+    <div id="ws-result" class="result-box">WebSocket 消息将显示在这里...</div>
+  </div>
+
+  <!-- 环境信息 -->
+  <div class="card">
+    <h2>6. 环境信息</h2>
+    <div id="env-info" class="result-box" style="min-height:120px;">加载中...</div>
+  </div>
+
+  <!-- 日志 -->
+  <div class="card full-width">
+    <h2>📋 日志</h2>
+    <button class="btn btn-red" onclick="document.getElementById('log').innerHTML='';" style="float:right;margin-top:-30px;">清空</button>
+    <div id="log"></div>
+  </div>
+
+</div>
+
+<script>
+let cameraStream = null;
+let lastVideoBase64 = null;   // 录制的视频 (data:video/webm;base64,...)
+let lastVideoMime = '';
+let lastFrames = [];           // 同时截的帧 (base64 无前缀)
+let lastFrameBase64 = null;    // 单帧
+let testWs = null;
+
+// ========== 日志 ==========
+function log(msg, cls='log-info') {
+  const el = document.getElementById('log');
+  const ts = new Date().toLocaleTimeString();
+  el.innerHTML += `<span class="${cls}">[${ts}] ${msg}</span>\n`;
+  el.scrollTop = el.scrollHeight;
+}
+
+// ========== 1. 摄像头 ==========
+async function openCamera() {
+  const statusEl = document.getElementById('camera-status');
+  statusEl.className = 'status status-wait';
+  statusEl.textContent = '⏳ 正在打开摄像头...';
+  log('尝试打开摄像头 (getUserMedia)...');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    statusEl.className = 'status status-err';
+    statusEl.textContent = '❌ 浏览器不支持 getUserMedia';
+    log('❌ navigator.mediaDevices.getUserMedia 不存在', 'log-err');
+    log('可能原因: 非 HTTPS 页面、浏览器不支持、或远程服务器环境', 'log-warn');
+    return;
+  }
+
+  try {
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 480, facingMode: 'user' }
+    });
+    document.getElementById('preview').srcObject = cameraStream;
+    statusEl.className = 'status status-ok';
+    statusEl.textContent = '✅ 摄像头已打开';
+    log('✅ 摄像头打开成功!', 'log-ok');
+    const track = cameraStream.getVideoTracks()[0];
+    const settings = track.getSettings();
+    log(`  分辨率: ${settings.width}x${settings.height}, 设备: ${track.label}`, 'log-ok');
+  } catch(e) {
+    cameraStream = null;
+    statusEl.className = 'status status-err';
+    statusEl.textContent = `❌ 失败: ${e.name}`;
+    log(`❌ 摄像头打开失败: ${e.name} - ${e.message}`, 'log-err');
+    if (e.name === 'NotAllowedError') log('  → 用户拒绝了权限，或页面非 HTTPS', 'log-warn');
+    else if (e.name === 'NotFoundError') log('  → 没有找到摄像头设备（远程服务器通常没有）', 'log-warn');
+    else if (e.name === 'NotReadableError') log('  → 摄像头被其他程序占用', 'log-warn');
+  }
+}
+
+function closeCamera() {
+  if (cameraStream) {
+    cameraStream.getTracks().forEach(t => t.stop());
+    cameraStream = null;
+    document.getElementById('preview').srcObject = null;
+    document.getElementById('camera-status').className = 'status status-wait';
+    document.getElementById('camera-status').textContent = '⏳ 已关闭';
+    log('摄像头已关闭');
+  }
+}
+
+// ========== 2. 混合录像 (视频 + 截帧，与主页面一致) ==========
+function captureOneFrame() {
+  const video = document.getElementById('preview');
+  if (!video.srcObject || video.videoWidth === 0) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  return canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+}
+
+function captureFrame() {
+  if (!cameraStream) {
+    log('❌ 摄像头未打开', 'log-err');
+    document.getElementById('frame-info').textContent = '❌ 请先打开摄像头';
+    return;
+  }
+  lastFrameBase64 = captureOneFrame();
+  if (lastFrameBase64) {
+    const sizeKB = (lastFrameBase64.length * 3/4 / 1024).toFixed(1);
+    document.getElementById('frame-info').innerHTML = `✅ 截帧成功 (~${sizeKB}KB)`;
+    document.getElementById('btn-eval').disabled = false;
+    log(`✅ 单帧截取: ~${sizeKB}KB`, 'log-ok');
+  }
+}
+
+function hybridCapture(durationMs, numFrames) {
+  return new Promise((resolve) => {
+    const frames = [];
+    let videoBase64 = null;
+    let mimeType = '';
+    let videoReady = false;
+    let framesReady = false;
+
+    function tryResolve() {
+      if (videoReady && framesReady) resolve({ videoBase64, mimeType, frames });
+    }
+
+    // --- 录视频 (MediaRecorder) ---
+    const chunks = [];
+    mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+      ? 'video/webm;codecs=vp8'
+      : (MediaRecorder.isTypeSupported('video/webm') ? 'video/webm' : 'video/mp4');
+    try {
+      const recorder = new MediaRecorder(cameraStream, { mimeType, videoBitsPerSecond: 800000 });
+      recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: mimeType });
+        if (blob.size > 500) {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            videoBase64 = reader.result;  // data:video/webm;base64,...
+            log(`  ✅ 视频录制完成: ${(blob.size/1024).toFixed(0)}KB, ${mimeType}`, 'log-ok');
+            videoReady = true;
+            tryResolve();
+          };
+          reader.onerror = () => { videoReady = true; tryResolve(); };
+          reader.readAsDataURL(blob);
+        } else {
+          log('  ⚠️ 视频太小，可能无效', 'log-warn');
+          videoReady = true;
+          tryResolve();
+        }
+      };
+      recorder.onerror = () => { videoReady = true; tryResolve(); };
+      recorder.start();
+      log(`  🔴 MediaRecorder 开始录制 (${durationMs}ms, ${mimeType})`);
+      setTimeout(() => { if (recorder.state === 'recording') recorder.stop(); }, durationMs);
+    } catch(e) {
+      log(`  ⚠️ MediaRecorder 不可用: ${e.message}`, 'log-warn');
+      videoReady = true;
+      tryResolve();
+    }
+
+    // --- 同时截帧 ---
+    const interval = Math.floor(durationMs / numFrames);
+    let count = 0;
+    log(`  📸 同步截帧: ${numFrames}帧, 间隔${interval}ms`);
+    const timer = setInterval(() => {
+      const frame = captureOneFrame();
+      if (frame) frames.push(frame);
+      count++;
+      if (count >= numFrames) {
+        clearInterval(timer);
+        log(`  ✅ 截帧完成: ${frames.length}帧`);
+        framesReady = true;
+        tryResolve();
+      }
+    }, interval);
+  });
+}
+
+async function startHybridRecord() {
+  if (!cameraStream) {
+    log('❌ 请先打开摄像头', 'log-err');
+    document.getElementById('frame-info').textContent = '❌ 请先打开摄像头';
+    return;
+  }
+
+  const durationMs = parseInt(document.getElementById('record-duration').value);
+  const numFrames = Math.max(3, Math.round(durationMs / 2500));  // 约每2.5秒一帧
+  const statusEl = document.getElementById('record-status');
+  const btnEl = document.getElementById('btn-record');
+
+  statusEl.className = 'status status-err';
+  statusEl.textContent = `🔴 录像中... (${durationMs/1000}秒)`;
+  btnEl.disabled = true;
+  document.getElementById('frame-info').textContent = `⏳ 录像+截帧进行中 (${durationMs/1000}秒, ${numFrames}帧)...`;
+  log(`开始混合录像: ${durationMs}ms, ${numFrames}帧`);
+
+  const startTime = Date.now();
+  const result = await hybridCapture(durationMs, numFrames);
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+  lastVideoBase64 = result.videoBase64;
+  lastVideoMime = result.mimeType;
+  lastFrames = result.frames;
+
+  // 显示录制的视频供回放
+  const videoEl = document.getElementById('recorded-video');
+  if (lastVideoBase64) {
+    videoEl.src = lastVideoBase64;
+    videoEl.style.display = 'block';
+  } else {
+    videoEl.style.display = 'none';
+  }
+
+  const videoKB = lastVideoBase64 ? (lastVideoBase64.length * 3/4 / 1024).toFixed(0) : 0;
+  const framesKB = (lastFrames.reduce((s, f) => s + f.length, 0) * 3/4 / 1024).toFixed(0);
+  
+  statusEl.className = 'status status-ok';
+  statusEl.textContent = `✅ 录制完成 (${elapsed}s)`;
+  btnEl.disabled = false;
+  document.getElementById('btn-eval').disabled = false;
+
+  const infoLines = [];
+  infoLines.push(`✅ 混合录像完成 (${elapsed}s)`);
+  infoLines.push(`📹 视频: ${lastVideoBase64 ? videoKB + 'KB (' + lastVideoMime + ')' : '❌ 无'}`);
+  infoLines.push(`🎞 截帧: ${lastFrames.length}帧, ${framesKB}KB`);
+  infoLines.push(`<br><b>评估策略: 视频优先 → 多帧降级 → 单帧兜底</b>`);
+  document.getElementById('frame-info').innerHTML = infoLines.join('<br>');
+
+  log(`✅ 录像完成: 视频=${lastVideoBase64 ? videoKB+'KB' : '无'}, 帧=${lastFrames.length}个(${framesKB}KB), 耗时${elapsed}s`, 'log-ok');
+}
+
+// ========== 4. 视觉评估 API ==========
+async function testEvalWithRecording() {
+  const taskId = document.getElementById('test-task-id').value;
+  const resultEl = document.getElementById('eval-result');
+
+  // 构建 payload：视频优先 + 帧降级
+  const payload = { task_id: taskId };
+  let mode = '';
+
+  if (lastVideoBase64) {
+    payload.video = lastVideoBase64;
+    payload.mime_type = lastVideoMime;
+    mode = '视频';
+  }
+  if (lastFrames.length > 0) {
+    payload.frames = lastFrames;
+    mode += (mode ? '+' : '') + `${lastFrames.length}帧`;
+  }
+  if (!lastVideoBase64 && lastFrames.length === 0 && lastFrameBase64) {
+    payload.image = lastFrameBase64;
+    mode = '单帧';
+  }
+  if (!mode) {
+    resultEl.textContent = '❌ 没有录像数据，请先录像';
+    return;
+  }
+
+  resultEl.innerHTML = `⏳ 正在调用 /api/vision-evaluate (${mode})...<br>VLM分析中，可能需要30-60秒...`;
+  log(`调用视觉评估 API: task=${taskId}, 模式=${mode}`);
+  const startTime = Date.now();
+
+  try {
+    const resp = await fetch('/api/vision-evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const result = await resp.json();
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    resultEl.innerHTML = `✅ 评估完成 (${elapsed}s, 模式: ${mode})<br><pre>${JSON.stringify(result, null, 2)}</pre>`;
+    log(`✅ 评估结果 (${elapsed}s): correct=${result.is_correct}, quality=${result.quality_level}, source=${result.source}`, 'log-ok');
+    if (result.evaluation_detail) log(`  详情: ${result.evaluation_detail}`, 'log-info');
+    if (result.steps_completed != null) log(`  完成步骤: ${result.steps_completed}/3`, 'log-info');
+  } catch(e) {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    resultEl.textContent = `❌ 请求失败 (${elapsed}s): ${e.message}`;
+    log(`❌ API 调用失败: ${e.message}`, 'log-err');
+  }
+}
+
+async function testEvalWithDummy() {
+  const taskId = document.getElementById('test-task-id').value;
+  const resultEl = document.getElementById('eval-result');
+  resultEl.textContent = '⏳ 用空数据测试 API 可达性...';
+  log(`测试 API 可达性: /api/vision-evaluate (task=${taskId})`);
+
+  try {
+    const resp = await fetch('/api/vision-evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: taskId })
+    });
+    const result = await resp.json();
+    resultEl.innerHTML = `API 可达 ✅<br><pre>${JSON.stringify(result, null, 2)}</pre>`;
+    log(`✅ API 可达，返回: ${JSON.stringify(result)}`, result.success ? 'log-ok' : 'log-warn');
+  } catch(e) {
+    resultEl.textContent = `❌ API 不可达: ${e.message}`;
+    log(`❌ API 不可达: ${e.message}`, 'log-err');
+  }
+}
+
+// ========== 5. WebSocket ==========
+function testWebSocket() {
+  const statusEl = document.getElementById('ws-status');
+  const resultEl = document.getElementById('ws-result');
+  statusEl.className = 'status status-wait';
+  statusEl.textContent = '⏳ 连接中...';
+  log('尝试 WebSocket 连接...');
+
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${location.host}/ws/voice`;
+  
+  try {
+    testWs = new WebSocket(wsUrl);
+    testWs.onopen = () => {
+      statusEl.className = 'status status-ok';
+      statusEl.textContent = '✅ 已连接';
+      resultEl.textContent = `连接成功: ${wsUrl}`;
+      log(`✅ WebSocket 连接成功: ${wsUrl}`, 'log-ok');
+    };
+    testWs.onmessage = (evt) => {
+      const data = JSON.parse(evt.data);
+      resultEl.innerHTML = `收到消息 (type=${data.type}):<br><pre>${JSON.stringify(data, null, 2).substring(0, 500)}</pre>`;
+      log(`← WS 收到: type=${data.type}`);
+    };
+    testWs.onerror = () => {
+      statusEl.className = 'status status-err';
+      statusEl.textContent = '❌ 连接错误';
+      log('❌ WebSocket 连接错误', 'log-err');
+    };
+    testWs.onclose = () => {
+      statusEl.className = 'status status-wait';
+      statusEl.textContent = '⏳ 已断开';
+      log('WebSocket 已断开');
+    };
+  } catch(e) {
+    statusEl.className = 'status status-err';
+    statusEl.textContent = `❌ ${e.message}`;
+    log(`❌ WebSocket 创建失败: ${e.message}`, 'log-err');
+  }
+}
+
+function sendVisionCapture() {
+  if (!testWs || testWs.readyState !== WebSocket.OPEN) {
+    log('❌ WebSocket 未连接，请先测试连接', 'log-err');
+    return;
+  }
+  const msg = { type: 'vision_eval_result', task_id: 'language_3step_action', 
+                result: { success: true, is_correct: true, quality_level: 'good', detail: '测试数据' } };
+  testWs.send(JSON.stringify(msg));
+  log(`→ WS 发送模拟 vision_eval_result: ${JSON.stringify(msg)}`);
+  document.getElementById('ws-result').textContent = '已发送模拟 vision_eval_result';
+}
+
+// ========== 6. 环境信息 ==========
+function showEnvInfo() {
+  const info = [];
+  info.push(`协议: ${location.protocol}`);
+  info.push(`主机: ${location.host}`);
+  info.push(`HTTPS: ${location.protocol === 'https:' ? '✅ 是' : '❌ 否 (摄像头可能不可用)'}`);
+  info.push(`getUserMedia: ${navigator.mediaDevices?.getUserMedia ? '✅ API 存在' : '❌ API 不存在'}`);
+  info.push(`MediaRecorder: ${typeof MediaRecorder !== 'undefined' ? '✅ 支持' : '❌ 不支持'}`);
+  info.push(`浏览器: ${navigator.userAgent.substring(0, 80)}...`);
+  info.push(`屏幕: ${screen.width}x${screen.height}`);
+  
+  if (typeof MediaRecorder !== 'undefined') {
+    const formats = ['video/webm;codecs=vp8', 'video/webm', 'video/mp4'];
+    const supported = formats.filter(f => MediaRecorder.isTypeSupported(f));
+    info.push(`录像格式: ${supported.join(', ') || '无支持格式'}`);
+  }
+  
+  if (navigator.mediaDevices) {
+    navigator.mediaDevices.enumerateDevices().then(devices => {
+      const videos = devices.filter(d => d.kind === 'videoinput');
+      const audios = devices.filter(d => d.kind === 'audioinput');
+      info.push(`视频设备: ${videos.length} 个${videos.length === 0 ? ' ⚠️ (无摄像头)' : ''}`);
+      videos.forEach((d, i) => info.push(`  [${i}] ${d.label || '未命名'}`));
+      info.push(`音频设备: ${audios.length} 个`);
+      document.getElementById('env-info').innerHTML = info.join('<br>');
+    }).catch(e => {
+      info.push(`设备枚举失败: ${e.message}`);
+      document.getElementById('env-info').innerHTML = info.join('<br>');
+    });
+  } else {
+    info.push('❌ navigator.mediaDevices 不可用');
+    document.getElementById('env-info').innerHTML = info.join('<br>');
+  }
+}
+
+// 页面加载
+window.addEventListener('load', () => {
+  showEnvInfo();
+  log('测试页面已加载', 'log-ok');
+  
+  ['watch', 'pencil', 'close_eyes', 'pentagons'].forEach(id => {
+    const img = document.getElementById(`img-${id === 'close_eyes' ? 'close' : id === 'pentagons' ? 'penta' : id}`);
+    if (img) {
+      img.onload = () => log(`✅ 图片 ${id}.png 加载成功 (${img.naturalWidth}x${img.naturalHeight})`, 'log-ok');
+      img.onerror = () => log(`❌ 图片 ${id}.png 加载失败!`, 'log-err');
+    }
+  });
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: voice-cloudflared
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --loglevel
+      - info
+      - --metrics
+      - 127.0.0.1:2000
+      - run
+    env_file:
+      - ../.env.cloudflare
+    # cloudflared 需要访问宿主机上的 127.0.0.1:8502。
+    network_mode: host
+    restart: unless-stopped

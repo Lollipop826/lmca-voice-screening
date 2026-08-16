@@ -1,0 +1,19 @@
+{
+    "location": {
+        "province": "辽宁省",
+        "city": "大连市",
+        "district": "甘井子区",
+        "neighborhood": "",
+        "street": "屹馨街",
+        "formatted_address": "辽宁省大连市甘井子区七贤岭街道屹馨街13-4-5-1号",
+        "place": "大医二院 1 1",
+        "adcode": "210211",
+        "source": "manual-profile",
+        "hospital": "大医二院",
+        "department": "1",
+        "floor": "5",
+        "bed_number": "1"
+    },
+    "updated_at": "2026-07-19T09:48:53.627076",
+    "auto_detected": true
+}

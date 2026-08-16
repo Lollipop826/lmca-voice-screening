@@ -1,0 +1,3 @@
+# Install after the application's runtime dependencies:
+#   python -m pip install -r requirements.txt -r requirements-test.txt
+pytest>=8.2,<10

@@ -1,0 +1,20 @@
+# Optional voice-emotion enhancement. The application works without this file.
+modelscope
+addict
+datasets
+simplejson
+sortedcontainers
+funasr
+librosa
+
+# Optional local ZipVoice TTS used to synthesize the comparison corpus.
+huggingface_hub
+safetensors
+lhotse
+vocos
+pydub
+tensorboard
+cn2an
+inflect
+jieba
+pypinyin>=0.55.0,<1.0.0

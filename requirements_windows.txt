@@ -1,0 +1,22 @@
+# Windows 部署依赖（API-only 模式，无本地模型）
+# USE_ARK_ASR=true, USE_ARK_TTS=true, USE_SPEAKER_VERIFIER=false, USE_LOCAL_EMBEDDING=false
+
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
+python-dotenv>=1.0.1
+pydantic>=2.7.0
+numpy>=1.26.0
+scipy>=1.11.0
+soundfile>=0.12.1
+onnxruntime>=1.18.0
+aiortc>=1.9.0
+websockets>=12.0
+requests>=2.31.0
+
+# LangChain Agent
+langgraph>=0.2.30
+langchain>=0.2.10
+langchain-openai>=0.1.22
+langchain-community>=0.3.7
+openai>=1.30.0
+memobase @ git+https://github.com/memodb-io/memobase.git@v0.0.42

@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MMSE 三步动作测试 Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #020617; color: #e2e8f0; min-height: 100vh; }
+    .page { max-width: 1180px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 1.8rem; color: #38bdf8; margin-bottom: 8px; }
+    .subtitle { color: #94a3b8; margin-bottom: 20px; line-height: 1.7; }
+    .layout { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px; }
+    .panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
+    .panel h2 { font-size: 1.05rem; margin-bottom: 14px; color: #7dd3fc; }
+    video { width: 100%; background: #000; border-radius: 14px; aspect-ratio: 4 / 3; object-fit: cover; transform: scaleX(-1); }
+    .status { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 0.92rem; background: #172033; color: #cbd5e1; }
+    .status.ok { background: rgba(34,197,94,0.15); color: #86efac; }
+    .status.warn { background: rgba(245,158,11,0.15); color: #fcd34d; }
+    .status.err { background: rgba(239,68,68,0.15); color: #fca5a5; }
+    .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+    button { border: none; border-radius: 10px; padding: 10px 16px; cursor: pointer; font-size: 0.95rem; font-weight: 600; transition: transform .15s ease, opacity .15s ease; }
+    button:hover { transform: translateY(-1px); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+    .primary { background: #2563eb; color: #fff; }
+    .success { background: #16a34a; color: #fff; }
+    .danger { background: #dc2626; color: #fff; }
+    .ghost { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .field { display: flex; flex-direction: column; gap: 6px; }
+    .field label { font-size: 0.86rem; color: #94a3b8; }
+    .field input { background: #020617; color: #e2e8f0; border: 1px solid #334155; border-radius: 10px; padding: 10px 12px; font-size: 0.95rem; }
+    .hint { margin-top: 14px; padding: 14px; border-radius: 12px; background: linear-gradient(135deg, rgba(37,99,235,0.18), rgba(14,165,233,0.10)); border: 1px solid rgba(56,189,248,0.28); line-height: 1.8; }
+    .hint strong { color: #e0f2fe; }
+    .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+    .metric { background: #020617; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; }
+    .metric .label { color: #94a3b8; font-size: 0.8rem; margin-bottom: 4px; }
+    .metric .value { font-size: 1.05rem; font-weight: 700; word-break: break-word; }
+    .metric.good .value { color: #4ade80; }
+    .metric.bad .value { color: #f87171; }
+    .metric.mid .value { color: #facc15; }
+    pre { margin-top: 14px; background: #020617; border: 1px solid #1e293b; border-radius: 12px; padding: 14px; font-size: 0.8rem; line-height: 1.55; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+    .logs { margin-top: 14px; background: #020617; border: 1px solid #1e293b; border-radius: 12px; padding: 14px; font-size: 0.8rem; line-height: 1.55; overflow: auto; white-space: pre-wrap; word-break: break-word; height: 240px; }
+    .logs div { margin-bottom: 8px; color: #cbd5e1; }
+    .logs .ok { color: #86efac; }
+    .logs .err { color: #fca5a5; }
+    .logs .info { color: #7dd3fc; }
+    .logs .warn { color: #fde68a; }
+    .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .tag { padding: 6px 10px; border-radius: 999px; background: #172033; color: #cbd5e1; font-size: 0.8rem; border: 1px solid #334155; }
+    .raw-title { margin-top: 14px; color: #94a3b8; font-size: 0.88rem; }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+      .grid, .summary { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>🧾 MMSE 三步动作测试 Demo</h1>
+    <div class="subtitle">
+      这个页面专门用于独立测试 `language_3step_action`，不需要进入完整问诊流程。<br>
+      点击开始后按提示完成：举手、握拳、张开五指。
+    </div>
+
+    <div class="layout">
+      <div class="panel">
+        <h2>实时预览与录制</h2>
+        <video id="preview" autoplay playsinline muted></video>
+        <div id="cameraStatus" class="status">等待打开摄像头</div>
+
+        <div class="grid" style="margin-top:14px;">
+          <div class="field">
+            <label for="durationMs">录制时长（毫秒）</label>
+            <input id="durationMs" type="number" min="3000" max="30000" step="1000" value="15000">
+          </div>
+          <div class="field">
+            <label for="frameCount">补充截帧数</label>
+            <input id="frameCount" type="number" min="0" max="16" step="1" value="4">
+          </div>
+        </div>
+
+        <div class="hint">
+          <strong>动作提示：</strong><br>
+          1. 把右手举到胸前；如果右手不方便，用左手也行。<br>
+          2. 把手握成拳头。<br>
+          3. 再把手张开，伸出五根手指。<br>
+          点击“开始三步动作测试”后直接做，不用口头回答。
+        </div>
+
+        <div class="controls">
+          <button id="openBtn" class="primary">打开摄像头</button>
+          <button id="closeBtn" class="ghost">关闭摄像头</button>
+          <button id="startBtn" class="success">开始三步动作测试</button>
+          <button id="clearBtn" class="danger">清空结果</button>
+        </div>
+
+        <div class="tag-row">
+          <div class="tag">任务: language_3step_action</div>
+          <div class="tag">接口: /api/vision-evaluate</div>
+          <div class="tag">模式: 视频 + 多帧兜底</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>评估结果</h2>
+        <div class="summary">
+          <div id="metricSuccess" class="metric">
+            <div class="label">success</div>
+            <div class="value">-</div>
+          </div>
+          <div id="metricCorrect" class="metric">
+            <div class="label">is_correct</div>
+            <div class="value">-</div>
+          </div>
+          <div id="metricSteps" class="metric">
+            <div class="label">steps_completed</div>
+            <div class="value">-</div>
+          </div>
+          <div id="metricSource" class="metric">
+            <div class="label">source</div>
+            <div class="value">-</div>
+          </div>
+          <div id="metricQuality" class="metric">
+            <div class="label">quality_level</div>
+            <div class="value">-</div>
+          </div>
+          <div id="metricElapsed" class="metric">
+            <div class="label">elapsed_ms</div>
+            <div class="value">-</div>
+          </div>
+        </div>
+
+        <div id="detailStatus" class="status" style="margin-top:14px;">还没有评估结果</div>
+
+        <div class="raw-title">原始 JSON</div>
+        <pre id="rawJson">{
+  "message": "点击开始进行测试"
+}</pre>
+      </div>
+
+      <div class="panel" style="grid-column: 1 / -1;">
+        <h2>日志</h2>
+        <div id="logs" class="logs"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const previewEl = document.getElementById('preview');
+    const cameraStatusEl = document.getElementById('cameraStatus');
+    const detailStatusEl = document.getElementById('detailStatus');
+    const rawJsonEl = document.getElementById('rawJson');
+    const logsEl = document.getElementById('logs');
+    const openBtn = document.getElementById('openBtn');
+    const closeBtn = document.getElementById('closeBtn');
+    const startBtn = document.getElementById('startBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const durationInput = document.getElementById('durationMs');
+    const frameCountInput = document.getElementById('frameCount');
+
+    let stream = null;
+    let isRunning = false;
+
+    function log(message, cls = 'info') {
+      const ts = new Date().toLocaleTimeString();
+      logsEl.innerHTML += `<div class="${cls}">[${ts}] ${message}</div>`;
+      logsEl.scrollTop = logsEl.scrollHeight;
+    }
+
+    function setStatus(el, text, type = '') {
+      el.className = `status${type ? ' ' + type : ''}`;
+      el.textContent = text;
+    }
+
+    function setMetric(id, value, tone = '') {
+      const el = document.getElementById(id);
+      el.className = `metric${tone ? ' ' + tone : ''}`;
+      el.querySelector('.value').textContent = value;
+    }
+
+    function resetMetrics() {
+      setMetric('metricSuccess', '-');
+      setMetric('metricCorrect', '-');
+      setMetric('metricSteps', '-');
+      setMetric('metricSource', '-');
+      setMetric('metricQuality', '-');
+      setMetric('metricElapsed', '-');
+      setStatus(detailStatusEl, '还没有评估结果');
+      rawJsonEl.textContent = JSON.stringify({ message: '点击开始进行测试' }, null, 2);
+    }
+
+    function updateButtons() {
+      openBtn.disabled = !!stream || isRunning;
+      closeBtn.disabled = !stream || isRunning;
+      startBtn.disabled = isRunning;
+      durationInput.disabled = isRunning;
+      frameCountInput.disabled = isRunning;
+    }
+
+    function formatBytes(bytes) {
+      if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB'];
+      let value = bytes;
+      let unitIndex = 0;
+      while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+      }
+      return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+    }
+
+    function estimateJsonBytes(payload) {
+      return new Blob([JSON.stringify(payload)]).size;
+    }
+
+    async function ensureCamera() {
+      if (stream) return true;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus(cameraStatusEl, '浏览器不支持 getUserMedia', 'err');
+        log('浏览器不支持 getUserMedia', 'err');
+        return false;
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 480 }, height: { ideal: 360 }, facingMode: 'user' },
+          audio: false,
+        });
+        previewEl.srcObject = stream;
+        setStatus(cameraStatusEl, '摄像头已打开', 'ok');
+        log('摄像头打开成功', 'ok');
+        updateButtons();
+        return true;
+      } catch (error) {
+        log(`首选摄像头参数失败: ${error.name} - ${error.message}`, 'warn');
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          previewEl.srcObject = stream;
+          setStatus(cameraStatusEl, '摄像头已打开（兼容模式）', 'ok');
+          log('摄像头兼容模式打开成功', 'ok');
+          updateButtons();
+          return true;
+        } catch (fallbackError) {
+          setStatus(cameraStatusEl, `摄像头打开失败: ${fallbackError.name}`, 'err');
+          log(`摄像头打开失败: ${fallbackError.name} - ${fallbackError.message}`, 'err');
+          return false;
+        }
+      }
+    }
+
+    function closeCamera() {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+      stream = null;
+      previewEl.srcObject = null;
+      setStatus(cameraStatusEl, '摄像头已关闭');
+      log('摄像头已关闭');
+      updateButtons();
+    }
+
+    function captureFrameBase64(maxWidth = 320, quality = 0.6) {
+      if (!previewEl.videoWidth || !previewEl.videoHeight) return null;
+      const scale = Math.min(1, maxWidth / previewEl.videoWidth);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(previewEl.videoWidth * scale));
+      canvas.height = Math.max(1, Math.round(previewEl.videoHeight * scale));
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(previewEl, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', quality).split(',')[1];
+    }
+
+    function blobToDataURL(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    async function recordHybrid(durationMs, frameCount) {
+      const chunks = [];
+      const frames = [];
+      const recorderOptions = {};
+      if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
+        recorderOptions.mimeType = 'video/webm;codecs=vp8';
+      } else if (MediaRecorder.isTypeSupported('video/webm')) {
+        recorderOptions.mimeType = 'video/webm';
+      }
+      recorderOptions.videoBitsPerSecond = 260000;
+      const recorder = new MediaRecorder(stream, recorderOptions);
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) chunks.push(event.data);
+      };
+
+      recorder.start();
+      log(`开始录制，时长 ${durationMs}ms，计划截帧 ${frameCount} 张`, 'info');
+
+      const intervalMs = frameCount > 0 ? Math.max(400, Math.floor(durationMs / frameCount)) : 0;
+      let captureTimer = null;
+      if (intervalMs > 0) {
+        captureTimer = setInterval(() => {
+          const frame = captureFrameBase64(320, 0.58);
+          if (frame) frames.push(frame);
+        }, intervalMs);
+      }
+
+      await new Promise(resolve => setTimeout(resolve, durationMs));
+      if (captureTimer) clearInterval(captureTimer);
+
+      const tailFrame = captureFrameBase64(320, 0.58);
+      if (tailFrame) frames.push(tailFrame);
+
+      const stopPromise = new Promise(resolve => {
+        recorder.onstop = resolve;
+      });
+      recorder.stop();
+      await stopPromise;
+
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      const videoDataUrl = await blobToDataURL(blob);
+      return {
+        video: videoDataUrl,
+        mimeType: 'video/webm',
+        frames,
+        blobSize: blob.size,
+        frameCount: frames.length,
+      };
+    }
+
+    async function postVisionEvaluate(payload, label) {
+      const requestBytes = estimateJsonBytes(payload);
+      log(`发送 ${label} 请求到 ${window.location.origin}/api/vision-evaluate，约 ${formatBytes(requestBytes)}`, 'info');
+
+      const response = await fetch('/api/vision-evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const text = await response.text();
+      let data = null;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (error) {
+        throw new Error(`HTTP ${response.status}: 返回了非 JSON 内容`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${data && data.error ? data.error : response.statusText}`);
+      }
+
+      return data;
+    }
+
+    function classifySourceTone(source) {
+      if (!source || source === '-') return '';
+      if (source === 'mediapipe') return 'mid';
+      if (source.startsWith('视频')) return 'good';
+      if (source.startsWith('多帧')) return 'mid';
+      if (source.startsWith('图片')) return 'mid';
+      return '';
+    }
+
+    function renderResult(result) {
+      const success = result && result.success === true;
+      const isCorrect = result ? result.is_correct : null;
+      const steps = result && Object.prototype.hasOwnProperty.call(result, 'steps_completed') ? result.steps_completed : '-';
+      const source = result && result.source ? result.source : '-';
+      const quality = result && result.quality_level ? result.quality_level : '-';
+      const elapsed = result && result.elapsed_ms != null ? `${result.elapsed_ms} ms` : '-';
+
+      setMetric('metricSuccess', String(result ? result.success : '-'), success ? 'good' : 'bad');
+      setMetric('metricCorrect', String(isCorrect), isCorrect === true ? 'good' : isCorrect === false ? 'bad' : 'mid');
+      setMetric('metricSteps', String(steps), typeof steps === 'number' && steps >= 2 ? 'good' : typeof steps === 'number' ? 'mid' : '');
+      setMetric('metricSource', source, classifySourceTone(source));
+      setMetric('metricQuality', quality, quality === 'excellent' || quality === 'good' ? 'good' : quality === 'fair' ? 'mid' : quality === 'poor' ? 'bad' : '');
+      setMetric('metricElapsed', elapsed);
+
+      const detail = result && (result.evaluation_detail || result.error) ? (result.evaluation_detail || result.error) : '无详情';
+      if (success) {
+        setStatus(detailStatusEl, detail, isCorrect === true ? 'ok' : isCorrect === false ? 'warn' : 'warn');
+      } else {
+        setStatus(detailStatusEl, detail, 'err');
+      }
+      rawJsonEl.textContent = JSON.stringify(result, null, 2);
+    }
+
+    async function runDemo() {
+      if (isRunning) return;
+      if (typeof MediaRecorder === 'undefined') {
+        setStatus(cameraStatusEl, '当前浏览器不支持 MediaRecorder，无法录制视频', 'err');
+        log('当前浏览器不支持 MediaRecorder，无法录制视频', 'err');
+        return;
+      }
+      const ready = await ensureCamera();
+      if (!ready) return;
+
+      const durationMs = Math.max(3000, Number(durationInput.value || 15000));
+      const frameCount = Math.max(0, Number(frameCountInput.value || 4));
+
+      isRunning = true;
+      updateButtons();
+      resetMetrics();
+      setStatus(detailStatusEl, '准备开始，请按提示做三步动作', 'warn');
+      log('三步动作测试开始', 'info');
+      log('动作顺序：举手 -> 握拳 -> 张开五指', 'info');
+
+      for (let seconds = 3; seconds >= 1; seconds--) {
+        setStatus(cameraStatusEl, `${seconds} 秒后开始录制，请准备`, 'warn');
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      try {
+        setStatus(cameraStatusEl, `录制中 ${Math.round(durationMs / 1000)} 秒，请直接完成动作`, 'ok');
+        const capture = await recordHybrid(durationMs, frameCount);
+        log(`录制完成，视频大小 ${formatBytes(capture.blobSize)}，截帧 ${capture.frames.length} 张`, 'info');
+
+        const baseContext = '独立测试demo：请重点判断是否完成举手、握拳、张开五指，并返回 steps_completed。';
+        const attempts = [
+          {
+            label: '视频+多帧',
+            payload: {
+              task_id: 'language_3step_action',
+              video: capture.video,
+              mime_type: capture.mimeType,
+              frames: capture.frames,
+              context: `${baseContext} 当前请求包含压缩视频和多帧截图。`,
+            },
+          },
+          {
+            label: '多帧兜底',
+            payload: {
+              task_id: 'language_3step_action',
+              frames: capture.frames.slice(-Math.min(4, capture.frames.length)),
+              context: `${baseContext} 视频请求失败后，仅使用多帧截图重试。`,
+            },
+          },
+        ];
+
+        if (capture.frames.length > 0) {
+          attempts.push({
+            label: '单图兜底',
+            payload: {
+              task_id: 'language_3step_action',
+              image: capture.frames[capture.frames.length - 1],
+              context: `${baseContext} 多帧请求失败后，仅用最后一张截图做最终兜底。`,
+            },
+          });
+        }
+
+        let result = null;
+        let lastRequestError = null;
+        for (const attempt of attempts) {
+          try {
+            setStatus(cameraStatusEl, `正在调用 /api/vision-evaluate (${attempt.label}) ...`, 'warn');
+            result = await postVisionEvaluate(attempt.payload, attempt.label);
+            log(`${attempt.label} 请求完成`, 'ok');
+            break;
+          } catch (requestError) {
+            lastRequestError = requestError;
+            log(`${attempt.label} 请求失败: ${requestError.message}`, 'err');
+          }
+        }
+
+        if (!result) {
+          throw lastRequestError || new Error('所有视觉评估请求均失败');
+        }
+
+        renderResult(result);
+        if (result && result.success) {
+          setStatus(cameraStatusEl, '评估完成', 'ok');
+          log(`评估完成: correct=${result.is_correct}, steps=${result.steps_completed}, source=${result.source}`, 'ok');
+        } else {
+          setStatus(cameraStatusEl, '评估失败', 'err');
+          log(`评估失败: ${result && result.error ? result.error : 'unknown error'}`, 'err');
+        }
+      } catch (error) {
+        setStatus(cameraStatusEl, `测试失败: ${error.message}`, 'err');
+        renderResult({ success: false, error: error.message, is_correct: null, quality_level: 'unknown' });
+        log(`测试失败: ${error.message}`, 'err');
+      } finally {
+        isRunning = false;
+        updateButtons();
+      }
+    }
+
+    function clearAll() {
+      logsEl.innerHTML = '';
+      resetMetrics();
+      setStatus(cameraStatusEl, stream ? '摄像头已打开' : '等待打开摄像头', stream ? 'ok' : '');
+    }
+
+    openBtn.addEventListener('click', ensureCamera);
+    closeBtn.addEventListener('click', closeCamera);
+    startBtn.addEventListener('click', runDemo);
+    clearBtn.addEventListener('click', clearAll);
+
+    resetMetrics();
+    updateButtons();
+    log('Demo 已加载，可直接打开摄像头开始测试', 'info');
+  </script>
+</body>
+</html>
