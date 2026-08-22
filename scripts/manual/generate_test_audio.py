@@ -1,9 +1,11 @@
 """
 生成测试音频文件（合成语音用于测试）
 """
-import os
-import sys
-sys.path.insert(0, '.')
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[2]
+OUTPUT_DIR = ROOT / "tests" / "test_audio"
 
 print("=" * 60)
 print("生成测试音频文件")
@@ -36,20 +38,20 @@ try:
         ("calm.wav", "我感觉还可以，比较平静", 120),    # 中等
     ]
 
-    output_dir = "tests/test_audio"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     for filename, text, rate in test_cases:
-        output_path = os.path.join(output_dir, filename)
+        output_path = OUTPUT_DIR / filename
         engine.setProperty('rate', rate)
-        engine.save_to_file(text, output_path)
+        engine.save_to_file(text, str(output_path))
 
     engine.runAndWait()
 
     print("\n✅ 测试音频生成完成！")
     for filename, text, _ in test_cases:
-        path = os.path.join(output_dir, filename)
-        if os.path.exists(path):
-            size = os.path.getsize(path)
+        path = OUTPUT_DIR / filename
+        if path.exists():
+            size = path.stat().st_size
             print(f"  {filename}: {text} ({size} bytes)")
 
 except ImportError:
@@ -74,5 +76,5 @@ except ImportError:
     print("  - Azure TTS: https://azure.microsoft.com/zh-cn/services/cognitive-services/text-to-speech/")
 
 print("\n" + "=" * 60)
-print("准备完成后，运行: python test_with_audio.py")
+print("准备完成后，运行: python scripts/manual/test_with_audio.py")
 print("=" * 60)

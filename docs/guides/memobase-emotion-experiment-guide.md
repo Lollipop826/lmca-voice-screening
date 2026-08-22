@@ -19,7 +19,7 @@
 
 ### 1.1 本地部署 Memobase（推荐）
 
-使用根目录 `docker-compose.yml` 中随仓库提供的 Memobase API、PostgreSQL 与 Redis 服务。具体变量、启动与健康检查步骤见 [docs/memobase-local.md](docs/memobase-local.md)；不要使用本节旧版本的单容器镜像命令。
+使用根目录 `docker-compose.yml` 中随仓库提供的 Memobase API、PostgreSQL 与 Redis 服务。具体变量、启动与健康检查步骤见 [Memobase 本地部署](../memobase-local.md)；不要使用本节旧版本的单容器镜像命令。
 
 ### 1.2 验证 Memobase 连接
 
@@ -134,7 +134,7 @@ python scripts\benchmark_latency.py --live `
 
 ### 3.1 当前实现
 
-`src/context_management/emotion_memobase.py` 已实现 SQLite 本地事实源、Memobase 异步镜像、失败 outbox 与检索回退；`src/voice/handlers/speech_turn_processor.py` 已在最终文字确认后写入和检索记忆。部署使用根目录 `docker-compose.yml`，详细步骤见 [docs/memobase-local.md](docs/memobase-local.md)。
+`src/context_management/emotion_memobase.py` 已实现 SQLite 本地事实源、Memobase 异步镜像、失败 outbox 与检索回退；`src/voice/handlers/speech_turn_processor.py` 已在最终文字确认后写入和检索记忆。部署使用根目录 `docker-compose.yml`，详细步骤见 [Memobase 本地部署](../memobase-local.md)。
 
 ### 3.2 初始化 SQLite 数据库
 
@@ -281,7 +281,7 @@ print("关键事件:", events)
 
 - **Memobase 官方文档**：https://github.com/memobase/memobase
 - **Emotion2Vec+ 论文**：https://arxiv.org/abs/2312.15185
-- **设计文档**：`Memobase集成方案-心理健康对话系统.md`
+- **架构设计**：[项目架构](../design-system.md)
 - **对比实验脚本**：`scripts/benchmark_emotion_models.py`
 
 ---

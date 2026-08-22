@@ -2,7 +2,10 @@
 完整的音频情绪识别测试脚本（带模拟音频降级）
 """
 import sys
-sys.path.insert(0, '.')
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
 import os
 import time
@@ -14,7 +17,7 @@ print("多模态情绪识别系统 - 完整测试")
 print("=" * 70)
 
 # 检查是否有真实音频
-audio_dir = "tests/test_audio"
+audio_dir = ROOT / "tests" / "test_audio"
 test_audio_files = ["happy.wav", "anxious.wav", "calm.wav"]
 has_real_audio = all(os.path.exists(os.path.join(audio_dir, f)) for f in test_audio_files)
 
@@ -232,8 +235,8 @@ else:
     print(f"  - 融合算法: 3 个模拟场景")
     print(f"\n⚠️ 需要真实音频完成完整测试")
     print(f"\n下一步:")
-    print(f"  1. 准备音频文件（见 generate_test_audio.py 说明）")
+    print(f"  1. 准备音频文件（运行 scripts/manual/generate_test_audio.py）")
     print(f"  2. 保存到: {audio_dir}/")
-    print(f"  3. 重新运行: python test_with_audio.py")
+    print(f"  3. 重新运行: python scripts/manual/test_with_audio.py")
 
 print("=" * 70)

@@ -67,7 +67,7 @@ git switch --detach <已验证的提交>
 ```
 
 当前开发分支是 `feat/webrtc-migration`。回滚前先确认工作区没有未提交修改，并选择
-`DELIVERY.md` 中记录的已验证提交。
+`archive/webrtc-delivery.md` 中记录的已验证提交。
 
 ## 6. 已知限制
 

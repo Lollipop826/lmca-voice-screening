@@ -1,6 +1,6 @@
 # 语音认知筛查服务（交付包）
 
-> 交接入口：先阅读 [HANDOVER.md](HANDOVER.md)。其中记录当前磁盘状态、启动命令、验证结果、已知失败和未实施方案。本文档保留为项目说明，不保证完全反映当前工作区的本地数据状态。
+> 项目文档：[产品概览](docs/product-brief.md)、[架构设计](docs/design-system.md)、[Memobase 与情绪实验指南](docs/guides/memobase-emotion-experiment-guide.md)。历史交接记录已归档至 `docs/archive/`，不代表当前状态。
 
 面向临床/照护场景的**低压力语音认知筛查**服务。医护人员通过手机大小的界面引导患者完成 MMSE 式对话任务，系统负责语音交互、状态管理、打断恢复、评分与会话历史；患者全程只用语音参与，不需要看屏或操作。
 
@@ -33,7 +33,7 @@
 | `docs/` | 部署、公开 API、SoulX、声纹、WebRTC 文档 |
 | `tests/` | 自动化测试 |
 
-建议阅读顺序：`PRODUCT.md` → `DESIGN.md` → `DELIVERY.md` → `voice_server.py` → `src/voice/application.py`。
+建议阅读顺序：[产品概览](docs/product-brief.md) → [架构设计](docs/design-system.md) → `voice_server.py` → `src/voice/application.py`。
 
 ---
 
@@ -144,11 +144,11 @@ bash start_voice_only.sh
 
 ## 7. 相关文档
 
-- `PRODUCT.md` — 产品定位与设计原则
-- `DESIGN.md` — 架构设计
-- `DELIVERY.md` — 交付说明与调用链
-- `docs/public-api.md` — 对外 REST API
-- `docs/speaker-verification.md` — 声纹验证
-- `docs/webrtc_migration.md` — WebRTC 接入
-- `docs/soulx_8502_integration.md` — SoulX 全双工集成
-- `docs/cloudflare-deployment.md` — Cloudflare 隧道部署
+- [产品概览](docs/product-brief.md) — 产品定位与设计原则
+- [架构设计](docs/design-system.md) — 服务架构
+- [Memobase 与情绪实验指南](docs/guides/memobase-emotion-experiment-guide.md) — 集成与验证
+- [公开 API](docs/public-api.md) — 对外 REST API
+- [声纹验证](docs/speaker-verification.md) — 声纹能力
+- [WebRTC 接入](docs/webrtc_migration.md) — 实时语音连接
+- [SoulX 集成](docs/soulx_8502_integration.md) — 全双工集成
+- [Cloudflare 部署](docs/cloudflare-deployment.md) — 公网入口

@@ -1,5 +1,7 @@
 # 语音筛查服务交付说明
 
+> 历史快照，记录 2026-07-16 的交付状态；不代表当前分支、测试结果或部署状态。
+
 更新时间：2026-07-16
 开发分支：`feat/webrtc-migration`
 
@@ -17,8 +19,8 @@
 
 交付人员建议依次阅读：
 
-1. `PRODUCT.md`
-2. `DESIGN.md`
+1. `../product-brief.md`
+2. `../design-system.md`
 3. `voice_server.py`
 4. `src/voice/application.py`
 5. `src/agents/screening_agent_function_calling.py`
@@ -96,9 +98,9 @@ deploy/
 docs/
 src/
 static/
-PRODUCT.md
-DESIGN.md
-DELIVERY.md
+docs/product-brief.md
+docs/design-system.md
+docs/archive/webrtc-delivery.md
 .env.example
 .env.cloudflare.example
 ```
