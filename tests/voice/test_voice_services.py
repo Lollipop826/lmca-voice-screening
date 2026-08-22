@@ -1243,6 +1243,80 @@ class PatientMemoryServiceTests(unittest.TestCase):
             "pt-1", session_id="call-1"
         )
 
+    def test_consolidate_runs_one_shadow_reflection_after_snapshot(self):
+        class Memory:
+            def __init__(self):
+                self.calls = []
+                self.done = threading.Event()
+
+            def consolidate_pending_turns(self, patient_id, *, session_id):
+                self.calls.append(("consolidate", patient_id, session_id))
+
+            def reflect_session(self, patient_id, session_id):
+                self.calls.append(("reflect", patient_id, session_id))
+                self.done.set()
+
+        session = self._session()
+        session.lifecycle.current_patient_id = "pt-1"
+        memory = Memory()
+        service = PatientMemoryService(
+            get_patient=Mock(),
+            create_patient=Mock(),
+            update_patient_profile=Mock(),
+            link_session_patient=Mock(),
+            long_term_memory=memory,
+            logger=Mock(),
+        )
+
+        self.assertTrue(service.consolidate(session))
+        self.assertTrue(memory.done.wait(1))
+        self.assertEqual(
+            memory.calls,
+            [("consolidate", "pt-1", "call-1"), ("reflect", "pt-1", "call-1")],
+        )
+
+    def test_consolidate_returns_without_waiting_for_reflection(self):
+        class Memory:
+            def __init__(self):
+                self.started = threading.Event()
+                self.release = threading.Event()
+
+            def consolidate_pending_turns(self, patient_id, *, session_id):
+                return {"consolidated": True}
+
+            def reflect_session(self, patient_id, session_id):
+                self.started.set()
+                self.release.wait(1)
+
+        session = self._session()
+        session.lifecycle.current_patient_id = "pt-1"
+        memory = Memory()
+        service = PatientMemoryService(
+            get_patient=Mock(),
+            create_patient=Mock(),
+            update_patient_profile=Mock(),
+            link_session_patient=Mock(),
+            long_term_memory=memory,
+            logger=Mock(),
+        )
+        returned = threading.Event()
+        result = []
+
+        def call_consolidate():
+            result.append(service.consolidate(session))
+            returned.set()
+
+        worker = threading.Thread(target=call_consolidate, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(returned.wait(0.5))
+            self.assertTrue(memory.started.wait(1))
+        finally:
+            memory.release.set()
+            worker.join(1)
+
+        self.assertEqual(result, [True])
+
     def test_consolidate_skips_unbound_or_empty_sessions(self):
         session = self._session()
         service = PatientMemoryService(

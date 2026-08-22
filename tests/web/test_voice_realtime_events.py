@@ -104,7 +104,8 @@ def test_voice_page_separates_long_term_session_and_turn_memory_views():
     assert 'id="memory-view-turn"' in html
     assert "function setMemoryPanelView(view = 'longterm')" in html
     assert "toggleMemoryPanel(true, 'longterm')" in html
-    assert "心理健康陪伴模式不生成会话摘要。" in html
+    assert "会话结束后异步生成摘要。" in html
+    assert "心理健康陪伴模式不生成会话摘要。" not in html
 
 
 def test_voice_page_keeps_the_initial_welcome_hint_compact():

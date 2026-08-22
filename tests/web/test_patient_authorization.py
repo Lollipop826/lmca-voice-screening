@@ -13,6 +13,7 @@ from src.web.auth import AuthService
 from src.web.memory_api import (
     MemoryApiController,
     MemoryItemDeleteRequest,
+    MemoryItemVersionRequest,
     MemoryItemUpdateRequest,
     MemoryRevisionConflict,
     MMSERecordRequest,
@@ -235,6 +236,22 @@ class _Memory:
         self.calls.append(("get", patient_id))
         return {"patient_id": patient_id}
 
+    def get_session_reflection(self, patient_id, session_id):
+        self.calls.append(("reflection", patient_id, session_id))
+        return {
+            "patient_id": patient_id,
+            "session_id": session_id,
+            "status": "succeeded",
+            "session_summary": "本次会话已完成整理。",
+            "attempt_count": 1,
+            "created_at": "2026-08-18T10:00:00",
+            "updated_at": "2026-08-18T10:00:01",
+            "completed_at": "2026-08-18T10:00:01",
+            "lease_token": "must-not-leak",
+            "last_error": "must-not-leak",
+            "summary_evidence_json": "must-not-leak",
+        }
+
     def list_memory_items(self, patient_id, *, include_deleted=False, mode=None):
         self.calls.append(("list", patient_id, include_deleted, mode))
         return [{"item_id": "item-1", "patient_id": patient_id}]
@@ -250,6 +267,31 @@ class _Memory:
     def delete_memory_item(self, patient_id, item_id, expected_version, deletion_token, *, deleted_by="user"):
         self.calls.append(("delete_item", patient_id, item_id, expected_version, deletion_token, deleted_by))
         return {"item_id": item_id, "status": "deleted", "version": expected_version + 1}
+
+    def confirm_memory_item(self, patient_id, item_id, expected_version, *, confirmed_by="user"):
+        self.calls.append(("confirm_item", patient_id, item_id, expected_version, confirmed_by))
+        return {"item_id": item_id, "status": "active", "version": expected_version + 1}
+
+    def reject_memory_item(self, patient_id, item_id, expected_version, *, rejected_by="user"):
+        self.calls.append(("reject_item", patient_id, item_id, expected_version, rejected_by))
+        return {"item_id": item_id, "status": "blocked", "version": expected_version + 1}
+
+    def stop_memory_item(self, patient_id, item_id, expected_version, *, stopped_by="user"):
+        self.calls.append(("stop_item", patient_id, item_id, expected_version, stopped_by))
+        return {"item_id": item_id, "status": "blocked", "version": expected_version + 1}
+
+    def get_memory_item(self, patient_id, item_id):
+        self.calls.append(("get_item", patient_id, item_id))
+        return {
+            "item_id": item_id,
+            "category": "facts",
+            "content": "当前安全内容",
+            "status": "active",
+            "version": 9,
+            "evidence_json": '[{"quote":"不应返回"}]',
+            "metadata_json": '{"secret":"不应返回"}',
+            "source_turn_id": "turn-secret",
+        }
 
 
 class _ApiAuth:
@@ -283,6 +325,89 @@ def test_memory_api_authorizes_before_read_and_passes_expected_revision():
     assert updated["data"]["revision"] == 5
     assert auth.calls == [("pt-1", "read"), ("pt-1", "write")]
     assert memory.calls[-1][-1] == 4
+
+
+def test_session_reflection_api_authorizes_and_hides_internal_fields():
+    memory = _Memory()
+    auth = _ApiAuth()
+    controller = MemoryApiController(memory, auth=auth)
+
+    result = asyncio.run(
+        controller.get_session_reflection("pt-1", SimpleNamespace(), "session-1")
+    )
+
+    assert auth.calls == [("pt-1", "read")]
+    assert memory.calls == [("reflection", "pt-1", "session-1")]
+    assert result["data"] == {
+        "session_id": "session-1",
+        "status": "succeeded",
+        "session_summary": "本次会话已完成整理。",
+        "attempt_count": 1,
+        "created_at": "2026-08-18T10:00:00",
+        "updated_at": "2026-08-18T10:00:01",
+        "completed_at": "2026-08-18T10:00:01",
+    }
+
+
+def test_session_reflection_api_includes_previous_completed_summary():
+    class PendingMemory(_Memory):
+        def get_session_reflection(self, patient_id, session_id):
+            self.calls.append(("reflection", patient_id, session_id))
+            return {"patient_id": patient_id, "session_id": session_id, "status": "missing"}
+
+        def get_latest_session_reflection(self, patient_id, *, exclude_session_id=None):
+            self.calls.append(("latest", patient_id, exclude_session_id))
+            return {
+                "session_id": "previous-session",
+                "status": "succeeded",
+                "session_summary": "上一轮会话摘要。",
+                "attempt_count": 1,
+                "completed_at": "2026-08-18T09:00:00",
+            }
+
+    memory = PendingMemory()
+    controller = MemoryApiController(memory, auth=_ApiAuth())
+
+    result = asyncio.run(
+        controller.get_session_reflection("pt-1", SimpleNamespace(), "session-2")
+    )
+
+    assert result["data"]["status"] == "missing"
+    assert result["data"]["previous_reflection"] == {
+        "session_id": "previous-session",
+        "status": "succeeded",
+        "session_summary": "上一轮会话摘要。",
+        "attempt_count": 1,
+        "created_at": None,
+        "updated_at": None,
+        "completed_at": "2026-08-18T09:00:00",
+    }
+
+
+def test_session_reflection_api_maps_failure_without_leaking_provider_error():
+    class FailedMemory(_Memory):
+        def get_session_reflection(self, patient_id, session_id):
+            return {
+                "session_id": session_id,
+                "status": "failed",
+                "attempt_count": 2,
+                "next_retry_at": "2026-08-19T10:05:00",
+                "last_error": "TimeoutError: qwen request timed out; api_key=secret",
+            }
+
+        def get_latest_session_reflection(self, patient_id, *, exclude_session_id=None):
+            return {"status": "missing"}
+
+    result = asyncio.run(
+        MemoryApiController(FailedMemory(), auth=_ApiAuth()).get_session_reflection(
+            "pt-1", SimpleNamespace(), "session-1"
+        )
+    )
+
+    assert result["data"]["failure_reason"] == "模型服务响应超时"
+    assert result["data"]["next_retry_at"] == "2026-08-19T10:05:00"
+    assert "last_error" not in result["data"]
+    assert "secret" not in str(result["data"])
 
 
 def test_memory_api_exposes_item_list_patch_and_delete_routes():
@@ -324,6 +449,73 @@ def test_memory_api_exposes_item_list_patch_and_delete_routes():
     ]
     assert [event["object_revision"] for event in audit_events] == [3, 4]
     assert all("已更新" not in str(event) for event in audit_events)
+
+
+def test_memory_item_candidate_actions_are_versioned_and_audited():
+    memory = _Memory()
+    audit_events = []
+    controller = MemoryApiController(
+        memory,
+        auth=_ApiAuth(),
+        audit_event=lambda **event: audit_events.append(event),
+    )
+
+    async def scenario():
+        confirmed = await controller.confirm_memory_item(
+            "pt-1", "candidate-1", MemoryItemVersionRequest(expected_version=2), SimpleNamespace()
+        )
+        rejected = await controller.reject_memory_item(
+            "pt-1", "candidate-2", MemoryItemVersionRequest(expected_version=3), SimpleNamespace()
+        )
+        stopped = await controller.stop_memory_item(
+            "pt-1", "active-1", MemoryItemVersionRequest(expected_version=4), SimpleNamespace()
+        )
+        return confirmed, rejected, stopped
+
+    confirmed, rejected, stopped = asyncio.run(scenario())
+
+    assert confirmed["item"]["status"] == "active"
+    assert rejected["item"]["status"] == "blocked"
+    assert stopped["item"]["status"] == "blocked"
+    assert [call[0] for call in memory.calls] == ["confirm_item", "reject_item", "stop_item"]
+    assert [event["action"] for event in audit_events] == [
+        "memory_item_confirmed",
+        "memory_item_rejected",
+        "memory_item_stopped",
+    ]
+
+
+def test_memory_item_api_returns_minimum_safe_fields_and_current_item_on_conflict():
+    class ConflictMemory(_Memory):
+        def update_memory_item(self, patient_id, item_id, content, expected_version, *, updated_by="user"):
+            raise MemoryRevisionConflict(9)
+
+        def list_memory_items(self, patient_id, *, include_deleted=False, mode=None):
+            return [self.get_memory_item(patient_id, "item-1")]
+
+    controller = MemoryApiController(ConflictMemory(), auth=_ApiAuth())
+
+    async def scenario():
+        listed = await controller.list_memory_items("pt-1", SimpleNamespace())
+        try:
+            await controller.update_memory_item(
+                "pt-1", "item-1", MemoryItemUpdateRequest(content="保留草稿", expected_version=3), SimpleNamespace()
+            )
+        except HTTPException as exc:
+            return listed, exc
+        raise AssertionError("stale item write must conflict")
+
+    listed, conflict = asyncio.run(scenario())
+
+    assert set(listed["items"][0]) == {
+        "item_id", "category", "content", "status", "version", "observed_at",
+        "valid_until", "sensitivity", "confidence", "created_at", "updated_at", "source",
+    }
+    assert conflict.status_code == 409
+    assert conflict.detail["current_revision"] == 9
+    assert conflict.detail["current_item"]["content"] == "当前安全内容"
+    assert "evidence_json" not in conflict.detail["current_item"]
+    assert "source_turn_id" not in conflict.detail["current_item"]
 
 
 def test_memory_item_audit_events_persist_without_content(tmp_path, monkeypatch):
@@ -472,10 +664,9 @@ def test_memory_api_maps_item_conflicts_and_missing_items():
             )
         )
     assert caught_update.value.status_code == 409
-    assert caught_update.value.detail == {
-        "error": "MEMORY_REVISION_CONFLICT",
-        "current_revision": 9,
-    }
+    assert caught_update.value.detail["error"] == "MEMORY_REVISION_CONFLICT"
+    assert caught_update.value.detail["current_revision"] == 9
+    assert caught_update.value.detail["current_item"]["version"] == 9
 
     with pytest.raises(HTTPException) as caught_delete:
         asyncio.run(

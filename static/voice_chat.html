@@ -615,6 +615,7 @@
         }
         #memory-panel .mem-status.idle { background: #e8f5e9; color: #2e7d32; }
         #memory-panel .mem-status.running { background: #fff3e0; color: #e65100; animation: pulse 1s infinite; }
+        #memory-panel .mem-status.failed { background: #ffebee; color: #c62828; }
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
         #memory-panel .mem-body {
             padding: 12px 16px; max-height: 300px; overflow-y: auto; font-size: 0.8rem;
@@ -690,6 +691,199 @@
             color: var(--text-primary);
             line-height: 1.55;
             word-break: break-word;
+        }
+        .memory-item-editor {
+            width: 100%;
+            min-height: 72px;
+            resize: vertical;
+            border: 1px solid #d8e3ec;
+            border-radius: 8px;
+            padding: 8px 10px;
+            color: var(--text-primary);
+            background: #fff;
+            font: inherit;
+            line-height: 1.5;
+        }
+        .memory-item-editor:disabled {
+            background: #f8fafc;
+            color: var(--text-secondary);
+        }
+        .memory-item-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .memory-item-status.candidate {
+            background: #fff3e0;
+            color: #e65100;
+        }
+        .memory-item-status.blocked {
+            background: #f1f5f9;
+            color: #64748b;
+        }
+        .memory-item-message {
+            margin: 0;
+            color: #b42318;
+            font-size: 0.72rem;
+            line-height: 1.45;
+        }
+        .memory-profile-form {
+            display: grid;
+            gap: 10px;
+        }
+        .memory-profile-id,
+        .memory-profile-field {
+            display: grid;
+            gap: 4px;
+        }
+        .memory-profile-id > span,
+        .memory-profile-field > span {
+            color: var(--text-secondary);
+            font-size: 0.72rem;
+            font-weight: 650;
+        }
+        .memory-profile-id > code,
+        .memory-profile-field input,
+        .memory-profile-field select {
+            min-height: 36px;
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #d8e3ec;
+            border-radius: 8px;
+            padding: 7px 9px;
+            background: #fff;
+            color: var(--text-primary);
+            font: inherit;
+        }
+        .memory-profile-id > code {
+            overflow-wrap: anywhere;
+            background: #f8fafc;
+            color: var(--text-secondary);
+        }
+        .memory-profile-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+        .memory-profile-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .memory-profile-note,
+        .memory-emotion-note {
+            margin: 0;
+            color: var(--text-secondary);
+            font-size: 0.72rem;
+            line-height: 1.5;
+        }
+        .memory-emotion-list {
+            display: grid;
+            gap: 8px;
+        }
+        .memory-emotion-heatmap {
+            display: grid;
+            gap: 6px;
+            padding: 10px;
+            border: 1px solid #d7e5ed;
+            border-radius: 10px;
+            background: #f8fbfd;
+        }
+        .memory-emotion-heatmap-head,
+        .memory-emotion-heatmap-row {
+            display: grid;
+            grid-template-columns: 48px repeat(var(--emotion-columns), minmax(12px, 1fr));
+            gap: 4px;
+            align-items: center;
+        }
+        .memory-emotion-heatmap-head {
+            color: var(--text-secondary);
+            font-size: 0.65rem;
+        }
+        .memory-emotion-heatmap-label {
+            overflow: hidden;
+            color: var(--text-secondary);
+            font-size: 0.68rem;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .memory-emotion-cell {
+            min-width: 12px;
+            height: 18px;
+            border: 1px solid rgb(var(--emotion-rgb) / .22);
+            border-radius: 3px;
+            background: rgb(var(--emotion-rgb) / var(--emotion-alpha));
+        }
+        .memory-emotion-trend-summary {
+            margin: 0;
+            color: var(--text-secondary);
+            font-size: 0.68rem;
+            line-height: 1.45;
+        }
+        .memory-emotion-card {
+            display: grid;
+            gap: 6px;
+            border: 1px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 9px 10px;
+            background: #fff;
+        }
+        .memory-emotion-head,
+        .memory-emotion-meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            color: var(--text-secondary);
+            font-size: 0.72rem;
+        }
+        .memory-emotion-head strong {
+            color: var(--text-primary);
+            font-size: 0.78rem;
+        }
+        .memory-emotion-bars {
+            display: grid;
+            gap: 4px;
+        }
+        .memory-emotion-bar {
+            display: grid;
+            grid-template-columns: 48px minmax(0, 1fr) 34px;
+            gap: 6px;
+            align-items: center;
+            color: var(--text-secondary);
+            font-size: 0.68rem;
+        }
+        .memory-emotion-track {
+            height: 6px;
+            overflow: hidden;
+            border-radius: 999px;
+            background: #eaf0f3;
+        }
+        .memory-emotion-fill {
+            display: block;
+            height: 100%;
+            border-radius: inherit;
+        }
+        .emotion-calm { --emotion-rgb: 20 150 132; color: #0f766e; }
+        .emotion-joy { --emotion-rgb: 202 138 4; color: #a16207; }
+        .emotion-sadness { --emotion-rgb: 37 99 235; color: #1d4ed8; }
+        .emotion-anxiety { --emotion-rgb: 234 88 12; color: #c2410c; }
+        .emotion-anger { --emotion-rgb: 220 38 38; color: #b91c1c; }
+        .emotion-fear { --emotion-rgb: 126 34 206; color: #7e22ce; }
+        .emotion-confusion { --emotion-rgb: 100 116 139; color: #475569; }
+        .memory-emotion-fill.emotion-calm,
+        .memory-emotion-fill.emotion-joy,
+        .memory-emotion-fill.emotion-sadness,
+        .memory-emotion-fill.emotion-anxiety,
+        .memory-emotion-fill.emotion-anger,
+        .memory-emotion-fill.emotion-fear,
+        .memory-emotion-fill.emotion-confusion {
+            background: rgb(var(--emotion-rgb));
         }
         .memory-item-actions {
             display: flex;
@@ -6586,6 +6780,7 @@
         #memory-panel.expanded .mem-body {
             display: block !important;
             flex: 1 1 auto;
+            min-height: 0;
             max-height: none !important;
             padding: 16px 18px 28px;
             overflow-y: auto;
@@ -6616,14 +6811,24 @@
         }
 
         .memory-panel-tabs {
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            display: flex;
             gap: 6px;
+            flex: 0 0 auto;
+            min-height: 48px;
             padding: 12px 18px 0;
             background: #ffffff;
+            overflow-x: auto;
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+
+        .memory-panel-tabs::-webkit-scrollbar {
+            display: none;
         }
 
         .memory-panel-tab {
+            flex: 0 0 auto;
+            min-width: 84px;
             min-height: 36px;
             padding: 0 8px;
             border: 1px solid #dbe4ea;
@@ -6900,27 +7105,35 @@
         <div id="memory-panel" role="dialog" aria-label="记忆侧边栏" aria-hidden="true">
             <div class="mem-header">
                 <div style="display:flex;align-items:center;gap:10px">
-                    <div class="mem-title"><i class="fas fa-brain"></i> 记忆与会话</div>
+                    <div class="mem-title"><i class="fas fa-brain"></i> 记忆管理</div>
                 </div>
                 <button type="button" class="memory-close-btn" onclick="toggleMemoryPanel(false)" aria-label="关闭记忆侧边栏" title="关闭记忆侧边栏">
                     <i class="fas fa-xmark"></i>
                 </button>
             </div>
             <div class="memory-panel-tabs" role="tablist" aria-label="记忆视图">
+                <button type="button" id="memory-tab-profile" class="memory-panel-tab" role="tab" aria-selected="false" aria-controls="memory-view-profile" onclick="setMemoryPanelView('profile')">患者资料</button>
                 <button type="button" id="memory-tab-longterm" class="memory-panel-tab active" role="tab" aria-selected="true" aria-controls="memory-view-longterm" onclick="setMemoryPanelView('longterm')">长期记忆</button>
+                <button type="button" id="memory-tab-emotion" class="memory-panel-tab" role="tab" aria-selected="false" aria-controls="memory-view-emotion" onclick="setMemoryPanelView('emotion')">情绪趋势</button>
                 <button type="button" id="memory-tab-session" class="memory-panel-tab" role="tab" aria-selected="false" aria-controls="memory-view-session" onclick="setMemoryPanelView('session')">本次会话</button>
                 <button type="button" id="memory-tab-turn" class="memory-panel-tab" role="tab" aria-selected="false" aria-controls="memory-view-turn" onclick="setMemoryPanelView('turn')">本轮进度</button>
             </div>
             <div class="mem-body">
+                <section id="memory-view-profile" class="memory-panel-view" role="tabpanel" aria-labelledby="memory-tab-profile">
+                    <div id="memory-profile-form" class="memory-profile-form"></div>
+                </section>
                 <section id="memory-view-longterm" class="memory-panel-view" role="tabpanel" aria-labelledby="memory-tab-longterm">
                     <div id="memory-items-list" class="memory-items-list"></div>
+                </section>
+                <section id="memory-view-emotion" class="memory-panel-view" role="tabpanel" aria-labelledby="memory-tab-emotion" hidden>
+                    <div id="memory-emotion-list" class="memory-emotion-list"></div>
                 </section>
                 <section id="memory-view-session" class="memory-panel-view" role="tabpanel" aria-labelledby="memory-tab-session" hidden>
                     <div class="memory-session-status">
                         <span id="mem-status-badge" class="mem-status idle">未启用</span>
                         <span id="mem-info" style="font-size:0.7rem;color:var(--text-secondary)">心理健康陪伴</span>
                     </div>
-                    <div id="mem-summary-text" class="memory-session-note">心理健康陪伴模式不生成会话摘要。</div>
+                    <div id="mem-summary-text" class="memory-session-note">会话结束后异步生成摘要。</div>
                     <div id="mem-topics" class="mem-topics"></div>
                     <div id="memory-summary-timeline" class="mem-timeline" hidden>
                         <div style="font-weight:600;font-size:0.75rem;margin-bottom:4px;color:var(--text-primary)">
@@ -7023,7 +7236,7 @@
                         <i class="fas fa-chevron-right"></i>
                     </a>
                     <button type="button" class="drawer-shortcut-link" onclick="toggleMemoryPanel(true, 'longterm')">
-                        <span><i class="fas fa-id-card-clip"></i> 我的记忆</span>
+                        <span><i class="fas fa-id-card-clip"></i> 记忆管理</span>
                         <i class="fas fa-chevron-right"></i>
                     </button>
                     <a href="/legacy" class="drawer-shortcut-link" target="_blank" rel="noopener">
@@ -7744,10 +7957,17 @@
 
         let activeMemoryPanelView = 'longterm';
         let lastMemorySnapshot = null;
+        let memoryProfile = {};
+        let memoryProfileRevision = 0;
+        let memoryProfileDrafts = {};
+        let memoryProfileMessage = '';
+        let memoryEmotionTrajectory = [];
 
         function setMemoryPanelView(view = 'longterm') {
-            const nextView = ['longterm', 'session', 'turn'].includes(view) ? view : 'longterm';
+            const nextView = ['profile', 'longterm', 'emotion', 'session', 'turn'].includes(view) ? view : 'longterm';
             activeMemoryPanelView = nextView;
+            const memoryBody = document.querySelector('#memory-panel .mem-body');
+            if (memoryBody) memoryBody.scrollTop = 0;
             document.querySelectorAll('.memory-panel-view').forEach((panel) => {
                 panel.hidden = panel.id !== `memory-view-${nextView}`;
             });
@@ -7756,7 +7976,9 @@
                 tab.classList.toggle('active', isActive);
                 tab.setAttribute('aria-selected', String(isActive));
             });
+            if (nextView === 'profile') refreshMemoryProfile();
             if (nextView === 'longterm') refreshMemoryItems();
+            if (nextView === 'emotion') refreshEmotionTrajectory();
             if (nextView === 'session') renderMemoryPanel(lastMemorySnapshot || {});
         }
 
@@ -9006,6 +9228,8 @@
                 localStorage.removeItem('voice_session_id');
             } catch (_) {}
             refreshMemoryItems();
+            refreshMemoryProfile();
+            refreshEmotionTrajectory();
         }
         function getSavedPatientId() {
             try {
@@ -9019,10 +9243,17 @@
         }
         function clearSavedPatient() {
             currentPatientId = null;
+            memoryProfile = {};
+            memoryProfileRevision = 0;
+            memoryProfileDrafts = {};
+            memoryProfileMessage = '';
+            memoryEmotionTrajectory = [];
             try {
                 localStorage.removeItem('voice_patient_id');
                 localStorage.removeItem('voice_session_id');
             } catch (_) {}
+            renderMemoryProfile();
+            renderEmotionTrajectory();
         }
 
         async function refreshMemoryItems() {
@@ -9046,6 +9277,201 @@
             }
         }
 
+        const memoryProfileFields = [
+            ['name', '姓名', 'text'],
+            ['age', '年龄', 'number'],
+            ['gender', '性别', 'select'],
+            ['education_years', '受教育年限', 'number'],
+            ['province', '省份', 'text'],
+            ['city', '城市', 'text'],
+            ['district', '区 / 县', 'text'],
+            ['hospital_name', '医院', 'text'],
+            ['department', '科室', 'text'],
+            ['floor', '所在楼层', 'text'],
+            ['bed_number', '床号', 'text'],
+        ];
+
+        function memoryPatientId() {
+            return currentPatientId || getSavedPatientId();
+        }
+
+        function renderMemoryProfile() {
+            const form = document.getElementById('memory-profile-form');
+            if (!form) return;
+            const patientId = memoryPatientId();
+            if (!patientId) {
+                form.innerHTML = '<p class="memory-profile-note">请先在陪伴设置中选择或创建患者档案。</p>';
+                return;
+            }
+            const fields = memoryProfileFields.map(([key, label, type]) => {
+                const value = memoryProfileDrafts[key] ?? '';
+                const control = type === 'select'
+                    ? `<select data-memory-profile-key="${key}"><option value="">未填写</option><option value="女" ${value === '女' ? 'selected' : ''}>女</option><option value="男" ${value === '男' ? 'selected' : ''}>男</option></select>`
+                    : `<input data-memory-profile-key="${key}" type="${type}" value="${escapeHtml(value)}">`;
+                return `<label class="memory-profile-field"><span>${label}</span>${control}</label>`;
+            });
+            form.innerHTML = `
+                <div class="memory-profile-id"><span>当前患者 ID</span><code>${escapeHtml(patientId)}</code></div>
+                <p class="memory-profile-note">患者选择和新建入口在“陪伴设置”中；这里保存当前患者的资料。</p>
+                <div class="memory-profile-grid">${fields.join('')}</div>
+                <div class="memory-profile-actions">
+                    ${memoryProfileMessage ? `<span class="memory-profile-note">${escapeHtml(memoryProfileMessage)}</span>` : ''}
+                    <button type="button" class="memory-action-btn" id="memory-profile-refresh">重新读取</button>
+                    <button type="button" class="memory-action-btn" id="memory-profile-save">保存资料</button>
+                </div>
+            `;
+            form.querySelectorAll('[data-memory-profile-key]').forEach((control) => {
+                control.addEventListener('input', () => {
+                    memoryProfileDrafts[control.dataset.memoryProfileKey] = control.value;
+                });
+                control.addEventListener('change', () => {
+                    memoryProfileDrafts[control.dataset.memoryProfileKey] = control.value;
+                });
+            });
+            form.querySelector('#memory-profile-refresh')?.addEventListener('click', () => refreshMemoryProfile());
+            form.querySelector('#memory-profile-save')?.addEventListener('click', () => saveMemoryProfile());
+        }
+
+        async function refreshMemoryProfile() {
+            const patientId = memoryPatientId();
+            if (!patientId) {
+                renderMemoryProfile();
+                return;
+            }
+            try {
+                const resp = await fetch(`/api/memory/${encodeURIComponent(patientId)}`, { credentials: 'same-origin' });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const payload = await resp.json();
+                memoryProfile = payload.data?.profile || {};
+                memoryProfileRevision = Number(payload.data?.revision || 0);
+                memoryProfileDrafts = { ...memoryProfile };
+                memoryProfileMessage = '';
+            } catch (err) {
+                memoryProfileMessage = `资料读取失败：${err.message || err}`;
+            }
+            renderMemoryProfile();
+        }
+
+        async function saveMemoryProfile() {
+            const patientId = memoryPatientId();
+            if (!patientId) return;
+            const profile = { ...memoryProfileDrafts };
+            Object.keys(profile).forEach((key) => {
+                if (profile[key] === '' || profile[key] == null) delete profile[key];
+            });
+            try {
+                const resp = await fetch(`/api/memory/${encodeURIComponent(patientId)}`, {
+                    method: 'PATCH',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ updates: { profile }, expected_revision: memoryProfileRevision })
+                });
+                const payload = await resp.json().catch(() => ({}));
+                if (resp.status === 409) {
+                    const revision = payload.detail?.current_revision;
+                    if (Number.isInteger(revision)) memoryProfileRevision = revision;
+                    memoryProfileMessage = '资料版本已变化，已保留你的修改；请重新读取后核对再保存。';
+                    renderMemoryProfile();
+                    return;
+                }
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const next = payload.data || {};
+                memoryProfile = next.profile || profile;
+                memoryProfileRevision = Number(next.revision || memoryProfileRevision);
+                memoryProfileDrafts = { ...memoryProfile };
+                memoryProfileMessage = '资料已保存。';
+            } catch (err) {
+                memoryProfileMessage = `资料保存失败：${err.message || err}`;
+            }
+            renderMemoryProfile();
+        }
+
+        function renderEmotionTrajectory() {
+            const list = document.getElementById('memory-emotion-list');
+            if (!list) return;
+            const patientId = memoryPatientId();
+            if (!patientId) {
+                list.innerHTML = '<p class="memory-emotion-note">请先选择患者档案。</p>';
+                return;
+            }
+            if (!memoryEmotionTrajectory.length) {
+                list.innerHTML = '<p class="memory-emotion-note">暂无可用情绪轨迹。情绪证据不可用时不会伪造趋势。</p>';
+                return;
+            }
+            const emotionKeys = ['calm', 'joy', 'sadness', 'anxiety', 'anger', 'fear', 'confusion'];
+            const emotionColors = {
+                calm: '平静', joy: '愉悦', sadness: '悲伤', anxiety: '焦虑',
+                anger: '愤怒', fear: '恐惧', confusion: '困惑',
+            };
+            const chartRows = memoryEmotionTrajectory
+                .filter((row) => row && row.analysis_status !== 'unavailable')
+                .slice(-10);
+            const heatmap = chartRows.length > 1 ? (() => {
+                const columns = chartRows.length;
+                const header = chartRows.map((row, index) => {
+                    const time = String(row.timestamp || '').slice(11, 16) || `第${index + 1}次`;
+                    return `<span title="${escapeHtml(String(row.timestamp || '时间未知'))}">${escapeHtml(time)}</span>`;
+                }).join('');
+                const cells = emotionKeys.map((key) => {
+                    const label = emotionColors[key];
+                    const points = chartRows.map((row) => {
+                        const value = Math.max(0, Math.min(1, Number(row[key]) || 0));
+                        const title = `${row.timestamp || '时间未知'} ${label} ${value.toFixed(2)}`;
+                        return `<span class="memory-emotion-cell emotion-${key}" style="--emotion-alpha:${(0.14 + value * 0.76).toFixed(2)}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}"></span>`;
+                    }).join('');
+                    return `<div class="memory-emotion-heatmap-row" style="--emotion-columns:${columns}"><span class="memory-emotion-heatmap-label emotion-${key}">${label}</span>${points}</div>`;
+                }).join('');
+                const change = emotionKeys.map((key) => ({
+                    key,
+                    value: (Number(chartRows[chartRows.length - 1][key]) || 0) - (Number(chartRows[0][key]) || 0),
+                })).sort((a, b) => Math.abs(b.value) - Math.abs(a.value)).slice(0, 3)
+                    .map(({ key, value }) => `${emotionColors[key]} ${value >= 0 ? '+' : ''}${value.toFixed(2)}`).join(' · ');
+                return `<section class="memory-emotion-heatmap"><div class="memory-emotion-heatmap-head" style="--emotion-columns:${columns}"><span>近${columns}次对比</span>${header}</div>${cells}<p class="memory-emotion-trend-summary">首末变化：${escapeHtml(change)}</p></section>`;
+            })() : '';
+            const rows = memoryEmotionTrajectory.slice(-20).reverse().map((row) => {
+                const scores = row || {};
+                const bars = emotionKeys.map((key) => {
+                    const value = Math.max(0, Math.min(1, Number(scores[key]) || 0));
+                    return `<div class="memory-emotion-bar"><span class="emotion-${key}">${emotionColors[key]}</span><span class="memory-emotion-track"><i class="memory-emotion-fill emotion-${key}" style="width:${Math.round(value * 100)}%"></i></span><b>${value.toFixed(2)}</b></div>`;
+                }).join('');
+                const dominant = scores.dominant_emotion || 'unknown';
+                const status = scores.analysis_status || 'unavailable';
+                const time = scores.timestamp || '时间未知';
+                const dominantLabel = emotionColors[dominant] || '未知';
+                return `<article class="memory-emotion-card"><div class="memory-emotion-head"><strong class="emotion-${escapeHtml(dominant)}">${escapeHtml(dominantLabel)}</strong><span>${escapeHtml(time)}</span></div><div class="memory-emotion-bars">${bars}</div><div class="memory-emotion-meta"><span>状态：${escapeHtml(status)}</span><span>效价 ${Number(scores.valence || 0).toFixed(2)} · 唤醒 ${Number(scores.arousal || 0).toFixed(2)}</span></div></article>`;
+            });
+            list.innerHTML = `<p class="memory-emotion-note">仅显示当前患者最近 ${rows.length} 条情绪分析结果；颜色越深表示该情绪越明显。</p>${heatmap}${rows.join('')}`;
+        }
+
+        async function refreshEmotionTrajectory() {
+            const patientId = memoryPatientId();
+            if (!patientId) {
+                memoryEmotionTrajectory = [];
+                renderEmotionTrajectory();
+                return;
+            }
+            try {
+                const resp = await fetch(`/api/memory/${encodeURIComponent(patientId)}/emotion-trajectory?limit=20`, { credentials: 'same-origin' });
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const payload = await resp.json();
+                memoryEmotionTrajectory = Array.isArray(payload.data) ? payload.data : [];
+            } catch (_) {
+                memoryEmotionTrajectory = [];
+            }
+            renderEmotionTrajectory();
+        }
+
+        const memoryItemDrafts = new Map();
+        const memoryItemMessages = new Map();
+
+        function memoryItemStatusLabel(status) {
+            return {
+                active: '正在用于陪伴',
+                candidate: '待确认',
+                blocked: '已停止用于陪伴',
+            }[status] || status || '未知状态';
+        }
+
         function renderMemoryItems(items) {
             const list = document.getElementById('memory-items-list');
             if (!list) return;
@@ -9055,31 +9481,54 @@
                 return;
             }
             items.forEach((item) => {
+                if (!memoryItemDrafts.has(item.item_id)) {
+                    memoryItemDrafts.set(item.item_id, item.content || '');
+                }
                 const card = document.createElement('div');
                 card.className = 'memory-item-card';
                 card.innerHTML = `
                     <div class="memory-item-head">
                         <span>${escapeHtml(memoryCategoryLabel(item.category))}</span>
+                        <span class="memory-item-status ${escapeHtml(item.status || '')}">
+                            ${escapeHtml(memoryItemStatusLabel(item.status))}
+                        </span>
                         <span>v${Number(item.version || 0)}</span>
                     </div>
-                    <div class="memory-item-content">${escapeHtml(item.content || '')}</div>
+                    <textarea class="memory-item-editor" rows="3" aria-label="记忆内容"></textarea>
                     <div class="memory-item-actions"></div>
                 `;
+                const editor = card.querySelector('.memory-item-editor');
+                editor.value = memoryItemDrafts.get(item.item_id) || '';
+                editor.disabled = item.status !== 'active';
+                editor.addEventListener('input', () => {
+                    memoryItemDrafts.set(item.item_id, editor.value);
+                });
+                const message = memoryItemMessages.get(item.item_id);
+                if (message) {
+                    const messageEl = document.createElement('p');
+                    messageEl.className = 'memory-item-message';
+                    messageEl.textContent = message;
+                    card.appendChild(messageEl);
+                }
                 const actions = card.querySelector('.memory-item-actions');
-                const editBtn = document.createElement('button');
-                editBtn.type = 'button';
-                editBtn.className = 'memory-action-btn';
-                editBtn.textContent = '编辑';
-                editBtn.addEventListener('click', () => editMemoryItem(item));
-                const deleteBtn = document.createElement('button');
-                deleteBtn.type = 'button';
-                deleteBtn.className = 'memory-action-btn';
-                deleteBtn.textContent = '删除';
-                deleteBtn.addEventListener('click', () => deleteMemoryItem(item));
-                actions.appendChild(editBtn);
-                actions.appendChild(deleteBtn);
+                if (item.status === 'candidate') {
+                    actions.appendChild(createMemoryActionButton('确认', 'memory-action-btn', () => memoryItemAction(item, 'confirm')));
+                    actions.appendChild(createMemoryActionButton('拒绝', 'memory-action-btn', () => memoryItemAction(item, 'reject')));
+                } else if (item.status === 'active') {
+                    actions.appendChild(createMemoryActionButton('保存修改', 'memory-action-btn', () => updateMemoryItem(item)));
+                    actions.appendChild(createMemoryActionButton('停止用于陪伴', 'memory-action-btn', () => memoryItemAction(item, 'stop-using')));
+                }
                 list.appendChild(card);
             });
+        }
+
+        function createMemoryActionButton(label, className, handler) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = className;
+            button.textContent = label;
+            button.addEventListener('click', handler);
+            return button;
         }
 
         function memoryCategoryLabel(category) {
@@ -9092,14 +9541,14 @@
             return labels[category] || category || '记忆';
         }
 
-        async function editMemoryItem(item) {
+        async function updateMemoryItem(item) {
             const patientId = currentPatientId || getSavedPatientId();
             if (!patientId || !item?.item_id) return;
-            const content = prompt('修改这条记忆：', item.content || '');
-            if (content === null) return;
-            const trimmed = content.trim();
+            const draft = memoryItemDrafts.get(item.item_id) ?? item.content ?? '';
+            const trimmed = draft.trim();
             if (!trimmed) {
-                alert('记忆内容不能为空');
+                memoryItemMessages.set(item.item_id, '记忆内容不能为空。');
+                renderMemoryItems(memoryItems);
                 return;
             }
             const resp = await fetch(`/api/memory/${encodeURIComponent(patientId)}/items/${encodeURIComponent(item.item_id)}`, {
@@ -9108,42 +9557,65 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: trimmed, expected_version: Number(item.version || 0) })
             });
+            const payload = await resp.json().catch(() => ({}));
             if (resp.status === 409) {
-                alert('这条记忆已被更新，请刷新后再修改。');
-                refreshMemoryItems();
+                const current = payload.detail?.current_item;
+                if (current) {
+                    memoryItems = memoryItems.map((value) => value.item_id === item.item_id ? current : value);
+                    memoryItemDrafts.set(item.item_id, trimmed);
+                    memoryItemMessages.set(item.item_id, '版本已变化，已保留你的修改；请核对当前版本后再次保存。');
+                    renderMemoryItems(memoryItems);
+                } else {
+                    memoryItemMessages.set(item.item_id, '版本已变化，请重新读取后再修改。');
+                    refreshMemoryItems();
+                }
                 return;
             }
             if (!resp.ok) {
-                alert('修改失败，请稍后重试。');
+                memoryItemMessages.set(item.item_id, '修改失败，请稍后重试。');
+                renderMemoryItems(memoryItems);
                 return;
             }
-            refreshMemoryItems();
+            const updated = payload.item;
+            memoryItems = memoryItems.map((value) => value.item_id === item.item_id ? updated : value);
+            memoryItemDrafts.delete(item.item_id);
+            memoryItemDrafts.set(updated.item_id, updated.content || '');
+            memoryItemMessages.delete(updated.item_id);
+            renderMemoryItems(memoryItems);
         }
 
-        async function deleteMemoryItem(item) {
+        async function memoryItemAction(item, action) {
             const patientId = currentPatientId || getSavedPatientId();
             if (!patientId || !item?.item_id) return;
-            if (!confirm(`确定删除这条记忆吗？\n\n${item.content || ''}`)) return;
-            const token = (window.crypto?.randomUUID && window.crypto.randomUUID()) || `delete-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-            const resp = await fetch(`/api/memory/${encodeURIComponent(patientId)}/items/${encodeURIComponent(item.item_id)}`, {
-                method: 'DELETE',
+            const resp = await fetch(`/api/memory/${encodeURIComponent(patientId)}/items/${encodeURIComponent(item.item_id)}/${action}`, {
+                method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ expected_version: Number(item.version || 0), deletion_token: token })
+                body: JSON.stringify({ expected_version: Number(item.version || 0) })
             });
+            const payload = await resp.json().catch(() => ({}));
             if (resp.status === 409) {
-                alert('这条记忆版本已变化，请刷新后再删除。');
-                refreshMemoryItems();
+                const current = payload.detail?.current_item;
+                if (current) {
+                    memoryItems = memoryItems.map((value) => value.item_id === item.item_id ? current : value);
+                    memoryItemMessages.set(item.item_id, '版本已变化，请核对当前版本后再次操作。');
+                    renderMemoryItems(memoryItems);
+                } else {
+                    refreshMemoryItems();
+                }
                 return;
             }
             if (!resp.ok) {
-                alert('删除失败，请稍后重试。');
+                memoryItemMessages.set(item.item_id, '操作失败，请稍后重试。');
+                renderMemoryItems(memoryItems);
                 return;
             }
-            memoryItems = memoryItems.filter(existing => existing.item_id !== item.item_id);
+            const updated = payload.item;
+            memoryItems = memoryItems.map((value) => value.item_id === item.item_id ? updated : value);
+            memoryItemDrafts.set(updated.item_id, updated.content || '');
+            memoryItemMessages.delete(updated.item_id);
             renderMemoryItems(memoryItems);
-            clearDeletedMemoryFromTurnRecords(item.item_id);
-            recordEvent('memory', '已删除一条长期记忆');
+            recordEvent('memory', action === 'stop-using' ? '已停止一条记忆用于陪伴' : `已${action === 'confirm' ? '确认' : '拒绝'}一条记忆`);
         }
 
         let _patientPrepareAttempted = false;
@@ -10352,6 +10824,8 @@
                 sessionStarted = true;
                 awaitingNextUtterance = false;
                 currentSessionMode = data.mode || currentSessionMode || 'wellbeing';
+                window._pendingSessionId = data.session_id || window._pendingSessionId || null;
+                if (data.profile?.patient_id) savePatientId(data.profile.patient_id);
                 applySessionModeUI();
                 startMemoryPoll();
                 if (data.profile) applyProfileToForm(data.profile);
@@ -10370,8 +10844,8 @@
                 awaitingNextUtterance = false;
                 currentSessionMode = data.mode || currentSessionMode || 'wellbeing';
                 applySessionModeUI();
-                startMemoryPoll();
                 window._pendingSessionId = data.session_id || window._pendingSessionId || null;
+                startMemoryPoll();
                 document.getElementById('end-btn').disabled = false;
                 document.getElementById('start-btn').disabled = true;
                 document.getElementById('start-btn').textContent = '进行中';
@@ -10388,6 +10862,7 @@
                     '患者长期记忆已绑定',
                     data.has_history ? '已有历史记录' : '首次会话'
                 );
+                startMemoryPoll();
 
             } else if (data.type === 'session_waiting_next_speech') {
                 sessionStarted = false;
@@ -10395,7 +10870,7 @@
                 currentSessionMode = 'wellbeing';
                 applySessionModeUI();
                 if (data.patient_id) savePatientId(data.patient_id);
-                stopMemoryPoll();
+                startMemoryPoll({ afterSessionEnd: true });
                 document.getElementById('end-btn').disabled = true;
                 document.getElementById('start-btn').disabled = false;
                 document.getElementById('start-btn').textContent = '开始新会话';
@@ -10731,19 +11206,36 @@
 
         // ============ 摘要监控面板 ============
         let _memPollTimer = null;
+        let _memPollDeadline = 0;
         let _lastMemSnapshotLen = 0;
 
-        function startMemoryPoll() {
-            if (!isCognitiveMode()) {
-                renderMemoryPanel({ available: false });
+        function startMemoryPoll(options = {}) {
+            if (options.afterSessionEnd && !isCognitiveMode()) {
+                _memPollDeadline = Date.now() + 90000;
+            }
+            if (_memPollTimer) {
+                pollMemoryPanel();
                 return;
             }
-            if (_memPollTimer) return;
-            _memPollTimer = setInterval(fetchMemorySnapshot, 3000);
-            fetchMemorySnapshot(); // 立即拉一次
+            _memPollTimer = setInterval(pollMemoryPanel, 3000);
+            pollMemoryPanel(); // 立即拉一次
         }
         function stopMemoryPoll() {
             if (_memPollTimer) { clearInterval(_memPollTimer); _memPollTimer = null; }
+            _memPollDeadline = 0;
+        }
+
+        function pollMemoryPanel() {
+            if (_memPollDeadline && Date.now() >= _memPollDeadline) {
+                stopMemoryPoll();
+                renderWellbeingSessionReflection({ status: 'pending', timed_out: true });
+                return;
+            }
+            if (isCognitiveMode()) {
+                fetchMemorySnapshot();
+            } else {
+                fetchSessionReflection();
+            }
         }
 
         async function fetchMemorySnapshot() {
@@ -10758,7 +11250,38 @@
             } catch(e) { /* 静默 */ }
         }
 
+        async function fetchSessionReflection() {
+            const patientId = currentPatientId || getSavedPatientId();
+            const sessionId = String(window._pendingSessionId || '').trim();
+            if (!patientId || !sessionId) {
+                renderWellbeingSessionReflection({ status: 'waiting' });
+                return;
+            }
+            try {
+                const resp = await fetch(
+                    `/api/memory/${encodeURIComponent(patientId)}/session-reflection?session_id=${encodeURIComponent(sessionId)}`,
+                    { credentials: 'same-origin' }
+                );
+                if (!resp.ok) {
+                    renderWellbeingSessionReflection({ status: 'failed' });
+                    return;
+                }
+                const payload = await resp.json();
+                const reflection = payload.data || payload;
+                renderWellbeingSessionReflection(reflection);
+                if (!sessionStarted && ['succeeded', 'failed', 'skipped'].includes(reflection.status)) {
+                    stopMemoryPoll();
+                }
+            } catch (e) {
+                if (!sessionStarted) renderWellbeingSessionReflection({ status: 'failed' });
+            }
+        }
+
         function renderMemoryPanel(snap) {
+            if (!isCognitiveMode()) {
+                renderWellbeingSessionReflection(snap);
+                return;
+            }
             lastMemorySnapshot = snap || {};
             // 状态徽章
             const badge = document.getElementById('mem-status-badge');
@@ -10768,12 +11291,12 @@
             const timeline = document.getElementById('memory-summary-timeline');
             const tlEl = document.getElementById('mem-timeline-list');
             if (!badge || !info || !textEl || !topicsEl || !timeline || !tlEl) return;
-            if (!isCognitiveMode() || snap.available === false) {
+            if (snap.available === false) {
                 badge.className = 'mem-status idle';
                 badge.textContent = '未启用';
-                info.textContent = '心理健康陪伴';
+                info.textContent = '本次会话';
                 textEl.className = 'memory-session-note';
-                textEl.textContent = '心理健康陪伴模式不生成会话摘要。';
+                textEl.textContent = '本次会话暂未生成摘要。';
                 topicsEl.innerHTML = '';
                 timeline.hidden = true;
                 return;
@@ -10825,6 +11348,68 @@
                 ).join('');
             } else {
                 tlEl.innerHTML = '<div class="mem-timeline-item"><span>暂无摘要记录</span></div>';
+            }
+        }
+
+        function renderWellbeingSessionReflection(reflection = {}) {
+            lastMemorySnapshot = reflection || {};
+            const badge = document.getElementById('mem-status-badge');
+            const info = document.getElementById('mem-info');
+            const textEl = document.getElementById('mem-summary-text');
+            const topicsEl = document.getElementById('mem-topics');
+            const timeline = document.getElementById('memory-summary-timeline');
+            if (!badge || !info || !textEl || !topicsEl || !timeline) return;
+
+            const rawStatus = String(reflection.status || 'waiting');
+            const status = rawStatus === 'missing' && sessionStarted ? 'waiting' : rawStatus;
+            const previous = reflection.previous_reflection || {};
+            const previousSummary = String(previous.session_summary || '').trim();
+            const labels = {
+                waiting: '等待结束',
+                missing: '等待整理',
+                pending: '等待整理',
+                running: '整理中...',
+                succeeded: '已完成',
+                failed: '整理失败',
+                skipped: '无需整理',
+            };
+            badge.className = `mem-status ${['pending', 'running'].includes(status) ? 'running' : status === 'failed' ? 'failed' : 'idle'}`;
+            badge.textContent = labels[status] || '等待整理';
+            info.textContent = status === 'succeeded'
+                ? (reflection.attempt_count ? `本次会话 | 第${reflection.attempt_count}次整理` : '本次会话')
+                : previousSummary
+                    ? `上一轮摘要 | 本次${labels[status] || '整理中'}`
+                    : reflection.attempt_count
+                        ? `后台整理，第${reflection.attempt_count}次`
+                        : '心理健康陪伴 | 本次会话';
+            topicsEl.innerHTML = '';
+            timeline.hidden = true;
+
+            const summary = String(reflection.session_summary || '').trim();
+            const displaySummary = status === 'succeeded' && summary ? summary : previousSummary;
+            if (displaySummary) {
+                textEl.className = 'mem-summary-text';
+                textEl.style.color = '';
+                textEl.style.fontStyle = '';
+                textEl.textContent = displaySummary;
+            } else {
+                textEl.className = 'memory-session-note';
+                textEl.style.color = '';
+                textEl.style.fontStyle = '';
+                const messages = {
+                    waiting: '会话结束后异步生成摘要。',
+                    missing: '会话已结束，正在等待后台整理。',
+                    pending: reflection.timed_out
+                        ? '摘要仍在后台整理，稍后可重新查看。'
+                        : '会话已结束，正在等待后台整理。',
+                    running: '正在后台整理本次会话，语音服务不受影响。',
+                    failed: `${reflection.failure_reason || '后台整理暂时不可用'}，原始对话仍已保留。${reflection.next_retry_at ? ` 将在 ${new Date(reflection.next_retry_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 自动重试。` : ''}`,
+                    skipped: '本次会话没有可整理的患者表达。',
+                };
+                textEl.textContent = messages[status] || messages.pending;
+            }
+            if (previousSummary && !(status === 'succeeded' && summary)) {
+                textEl.title = '当前显示的是上一轮已完成摘要；本轮摘要完成后会自动替换。';
             }
         }
 
@@ -13073,7 +13658,8 @@
                 sessionStarted = false;
                 awaitingNextUtterance = false;
                 _transportRecovery = null;
-                stopMemoryPoll();
+                if (isCognitiveMode()) stopMemoryPoll();
+                else startMemoryPoll({ afterSessionEnd: true });
                 resetAnswerCompletionModeState();
                 document.getElementById('end-btn').disabled = true;
 

@@ -56,7 +56,12 @@ function loadPatient() {
       </form>
 
       <div class="app-content">
-        <MemoryCard :key="`${patientId}:${apiBase}`" :patient-id="patientId" :api-base="apiBase" />
+        <MemoryCard
+          :key="`${patientId}:${apiBase}`"
+          :patient-id="patientId"
+          :api-base="apiBase"
+          login-path="/login?next=/"
+        />
 
         <aside class="app-aside" aria-label="连接信息">
           <div class="app-aside__section">

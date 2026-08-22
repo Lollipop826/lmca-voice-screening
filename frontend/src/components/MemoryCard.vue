@@ -4,18 +4,20 @@ import { computed, onMounted, ref, watch } from "vue"
 const props = defineProps({
   patientId: { type: String, required: true },
   apiBase: { type: String, default: "/api/memory" },
+  loginPath: { type: String, default: "/login?next=/" },
 })
 
 const snapshot = ref(null)
-const narrative = ref("")
+const memoryItems = ref([])
+const itemDrafts = ref({})
+const itemConflicts = ref({})
+const itemPending = ref({})
 const profile = ref({
   name: "",
   age: "",
   gender: "",
   education_years: "",
 })
-const factsText = ref("")
-const preferencesText = ref("")
 const loading = ref(false)
 const saving = ref(false)
 const error = ref("")
@@ -74,14 +76,25 @@ async function load() {
   loading.value = true
   error.value = ""
   try {
-    const response = await fetch(`${props.apiBase}/${encodeURIComponent(props.patientId)}`)
-    if (!response.ok) throw new Error("记忆读取失败")
-    const payload = await response.json()
+    const [snapshotResponse, itemsResponse] = await Promise.all([
+      fetch(`${props.apiBase}/${encodeURIComponent(props.patientId)}`),
+      fetch(`${props.apiBase}/${encodeURIComponent(props.patientId)}/items`),
+    ])
+    if (snapshotResponse.status === 401 || itemsResponse.status === 401) {
+      throw new Error("请先登录后查看患者记忆")
+    }
+    if (!snapshotResponse.ok || !itemsResponse.ok) throw new Error("记忆读取失败")
+    const [payload, itemsPayload] = await Promise.all([
+      snapshotResponse.json(),
+      itemsResponse.json(),
+    ])
     snapshot.value = payload.data || payload
     profile.value = { ...emptyProfile, ...(snapshot.value.profile || {}) }
-    narrative.value = snapshot.value.narrative || ""
-    factsText.value = (snapshot.value.facts || []).join("\n")
-    preferencesText.value = (snapshot.value.preferences || []).join("\n")
+    memoryItems.value = itemsPayload.items || []
+    itemDrafts.value = Object.fromEntries(
+      memoryItems.value.map((item) => [item.item_id, item.content || ""]),
+    )
+    itemConflicts.value = {}
   } catch (cause) {
     error.value = cause.message
   } finally {
@@ -103,13 +116,14 @@ async function save() {
       body: JSON.stringify({
         updates: {
           profile: profileUpdates,
-          facts: splitLines(factsText.value),
-          preferences: splitLines(preferencesText.value),
-          narrative: narrative.value,
         },
+        expected_revision: Number(snapshot.value?.revision || 0),
       }),
     })
-    if (!response.ok) throw new Error("记忆保存失败")
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}))
+      throw new Error(payload.detail?.error === "MEMORY_REVISION_CONFLICT" ? "资料已被其他修改更新，当前输入未覆盖。" : "资料保存失败")
+    }
     await response.json()
     await load()
     saved.value = true
@@ -120,11 +134,74 @@ async function save() {
   }
 }
 
-function splitLines(value) {
-  return value
-    .split(/\r?\n|[，,]/)
-    .map((item) => item.trim())
-    .filter(Boolean)
+function setItem(item, previousItemId = item.item_id) {
+  const index = memoryItems.value.findIndex((value) => value.item_id === previousItemId)
+  if (index >= 0) memoryItems.value.splice(index, 1, item)
+}
+
+function setItemPending(itemId, value) {
+  itemPending.value = { ...itemPending.value, [itemId]: value }
+}
+
+function itemStatus(item) {
+  return { active: "正在用于陪伴", candidate: "等待确认", blocked: "已停止用于陪伴" }[item.status] || item.status
+}
+
+async function updateItem(item) {
+  const draft = String(itemDrafts.value[item.item_id] || "").trim()
+  if (!draft) {
+    itemConflicts.value = { ...itemConflicts.value, [item.item_id]: { message: "记忆内容不能为空" } }
+    return
+  }
+  await itemRequest(item, "PATCH", "", { content: draft, expected_version: item.version })
+}
+
+async function itemAction(item, action) {
+  await itemRequest(item, "POST", `/${action}`, { expected_version: item.version })
+}
+
+async function itemRequest(item, method, suffix, body) {
+  const draft = itemDrafts.value[item.item_id]
+  setItemPending(item.item_id, true)
+  itemConflicts.value = { ...itemConflicts.value, [item.item_id]: null }
+  try {
+    const response = await fetch(`${props.apiBase}/${encodeURIComponent(props.patientId)}/items/${encodeURIComponent(item.item_id)}${suffix}`, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const current = payload.detail?.current_item
+      if (response.status === 409 && current) {
+        setItem(current)
+        itemDrafts.value = { ...itemDrafts.value, [item.item_id]: draft }
+        itemConflicts.value = {
+          ...itemConflicts.value,
+          [item.item_id]: { message: "此项已被其他修改更新；已保留你的输入，可在核对当前版本后重新保存。", current },
+        }
+        return
+      }
+      throw new Error("此项更新失败")
+    }
+    setItem(payload.item, item.item_id)
+    const nextDrafts = { ...itemDrafts.value, [payload.item.item_id]: payload.item.content || "" }
+    if (payload.item.item_id !== item.item_id) delete nextDrafts[item.item_id]
+    itemDrafts.value = nextDrafts
+    await refreshSnapshotRevision()
+  } catch (cause) {
+    itemConflicts.value = { ...itemConflicts.value, [item.item_id]: { message: cause.message } }
+  } finally {
+    setItemPending(item.item_id, false)
+  }
+}
+
+async function refreshSnapshotRevision() {
+  const response = await fetch(`${props.apiBase}/${encodeURIComponent(props.patientId)}`)
+  if (!response.ok) return
+  const payload = await response.json()
+  const next = payload.data || payload
+  snapshot.value = { ...snapshot.value, revision: next.revision, mmse_history: next.mmse_history, emotion_summary: next.emotion_summary }
 }
 
 async function saveMmse() {
@@ -167,7 +244,10 @@ onMounted(load)
     </header>
 
     <p v-if="loading" class="memory-card__status">正在读取</p>
-    <p v-else-if="error" class="memory-card__status memory-card__status--error">{{ error }}</p>
+    <div v-else-if="error" class="memory-card__status memory-card__status--error">
+      <p>{{ error }}</p>
+      <a v-if="error.includes('登录')" class="memory-card__login" :href="props.loginPath">前往登录</a>
+    </div>
 
     <template v-if="snapshot && !loading">
       <section class="memory-card__section">
@@ -181,19 +261,33 @@ onMounted(load)
       </section>
 
       <section class="memory-card__section">
-        <h3>可编辑记忆</h3>
-        <label class="memory-card__field">
-          <span>长期事实</span>
-          <textarea v-model="factsText" rows="3" aria-label="长期事实" />
-        </label>
-        <label class="memory-card__field">
-          <span>兴趣爱好</span>
-          <textarea v-model="preferencesText" rows="3" aria-label="兴趣爱好" />
-        </label>
-        <label class="memory-card__field">
-          <span>记忆叙事</span>
-          <textarea v-model="narrative" rows="4" aria-label="长期记忆叙事" />
-        </label>
+        <h3>逐项陪伴记忆</h3>
+        <p v-if="!memoryItems.length" class="memory-card__empty">当前没有可供核对的记忆项。</p>
+        <article v-for="item in memoryItems" :key="item.item_id" class="memory-item">
+          <header class="memory-item__header">
+            <strong>{{ item.category }}</strong>
+            <span class="memory-item__status" :class="`memory-item__status--${item.status}`">{{ itemStatus(item) }}</span>
+          </header>
+          <label class="memory-card__field">
+            <span>内容</span>
+            <textarea v-model="itemDrafts[item.item_id]" rows="3" :disabled="item.status !== 'active'" :aria-label="`${item.category}记忆内容`" />
+          </label>
+          <p v-if="item.sensitivity !== 'normal'" class="memory-item__sensitivity">敏感级别：{{ item.sensitivity }}</p>
+          <p v-if="itemConflicts[item.item_id]" class="memory-item__conflict">
+            {{ itemConflicts[item.item_id].message }}
+            <span v-if="itemConflicts[item.item_id].current">当前版本：{{ itemConflicts[item.item_id].current.content }}</span>
+          </p>
+          <div class="memory-item__actions">
+            <template v-if="item.status === 'candidate'">
+              <button type="button" class="memory-item__confirm" :disabled="itemPending[item.item_id]" @click="itemAction(item, 'confirm')">确认</button>
+              <button type="button" class="memory-item__reject" :disabled="itemPending[item.item_id]" @click="itemAction(item, 'reject')">拒绝</button>
+            </template>
+            <template v-else-if="item.status === 'active'">
+              <button type="button" class="memory-item__save" :disabled="itemPending[item.item_id]" @click="updateItem(item)">保存此项</button>
+              <button type="button" class="memory-item__stop" :disabled="itemPending[item.item_id]" @click="itemAction(item, 'stop-using')">停止用于陪伴</button>
+            </template>
+          </div>
+        </article>
       </section>
 
       <section v-if="emotionRows.length" class="memory-card__section">
@@ -335,6 +429,94 @@ textarea:focus-visible {
   margin-top: 10px;
 }
 
+.memory-card__empty,
+.memory-item__sensitivity,
+.memory-item__conflict {
+  color: #69798f;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.memory-item {
+  border: 1px solid #d9e3e8;
+  border-radius: 6px;
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+}
+
+.memory-item__header,
+.memory-item__actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.memory-item__header strong {
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.memory-item__status {
+  background: #e7f2ec;
+  border-radius: 4px;
+  color: #207044;
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 4px 7px;
+}
+
+.memory-item__status--candidate {
+  background: #fff3d9;
+  color: #8a5a00;
+}
+
+.memory-item__status--blocked {
+  background: #f4e5e2;
+  color: #9f352c;
+}
+
+.memory-item__sensitivity {
+  color: #8a5a00;
+}
+
+.memory-item__conflict {
+  color: #b42318;
+}
+
+.memory-item__conflict span {
+  display: block;
+  margin-top: 4px;
+}
+
+.memory-item__actions {
+  justify-content: flex-start;
+}
+
+.memory-item__actions button {
+  border-radius: 6px;
+  cursor: pointer;
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.memory-item__confirm,
+.memory-item__save {
+  background: #438ea0;
+  color: #fff;
+}
+
+.memory-item__reject,
+.memory-item__stop {
+  background: #fff;
+  border: 1px solid #c45a4f;
+  color: #a13f36;
+}
+
 textarea,
 input {
   background: #fff;
@@ -458,6 +640,16 @@ textarea {
   }
 
   .memory-card__mmse-fields button {
+    width: 100%;
+  }
+
+  .memory-item__header,
+  .memory-item__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .memory-item__actions button {
     width: 100%;
   }
 }

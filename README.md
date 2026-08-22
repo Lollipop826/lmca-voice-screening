@@ -66,6 +66,8 @@ Invoke-WebRequest http://localhost:8502/health
 
 根目录 Compose 还包含本地 Memobase API、PostgreSQL 和 Redis；启动前需在 `.env` 中填写 `DASHSCOPE_API_KEY`，并让 `ACCESS_TOKEN` 与 `MEMOBASE_API_KEY` 保持相同。完整 Compose 启动时，语音服务通过固定的 Docker 服务名连接本地 Memobase；仅需语音服务及 SQLite 回退时，可执行 `docker compose up -d --build voice-server`。完整的部署、健康检查和数据备份边界见 [docs/memobase-local.md](docs/memobase-local.md)。
 
+语音和记忆管理使用同一个用户界面：访问 `http://127.0.0.1:8502/`，登录后从语音页面抽屉进入“记忆管理”。不需要单独启动 `frontend` 的 Vite 开发服务器或访问 `5173`；`frontend/` 仅保留用于源码维护和构建验证。
+
 ### 方式 B：本地脚本运行
 
 ```bash

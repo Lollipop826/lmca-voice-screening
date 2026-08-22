@@ -43,7 +43,7 @@
 | `src/context_management/emotion_memobase.py` | 患者长期记忆、情绪轨迹、本地 SQLite、Memobase 镜像 |
 | `src/web/` | 认证、管理页面、公开 API、记忆 API |
 | `static/` | 当前后端使用的静态页面 |
-| `frontend/` | 独立 Vue/Vite 记忆界面，当前只包含少量源码 |
+| `frontend/` | 记忆管理源码和构建验证用的 Vue/Vite 工程；用户入口已内嵌在 `8502` 语音页面 |
 | `tests/` | 43 个 Python 测试文件，按 agents/voice/web/integrations 分组 |
 | `kb/` | 阿尔茨海默病、抑郁等知识库切片；不需要改记忆引擎时不要重建 |
 | `models/` | 本地 ONNX/TTS/重排模型，约 3.8 GB |
@@ -62,21 +62,32 @@ python -m pytest -q
 python -m compileall -q voice_server.py src tests
 ```
 
-当前 `pytest -q` 结果：**362 passed**。本次交接前曾发现 3 个 benchmark 测试夹具落后于脚本签名，已补齐后恢复全绿。脚本当前参数包括：
+当前 `pytest -q` 结果：**411 passed**。本次交接前曾发现 3 个 benchmark 测试夹具落后于脚本签名，已补齐后恢复全绿。脚本当前参数包括：
 
 - `_run_once(..., long_term_memory_enabled, audio_output)`；
 - `_run_benchmark()` 读取 `args.long_term_memory` 和 `args.audio_output_dir`。
 
-### 3.2 前端
+### 3.2 统一用户界面
+
+记忆管理已经作为语音系统内的功能提供，用户只需要启动并访问 `8502`：
+
+```text
+http://127.0.0.1:8502/
+```
+
+登录后从语音页面的抽屉进入“记忆管理”。长期记忆、本次会话和本轮进度都在同一个页面中显示；编辑、确认、拒绝、停止用于陪伴及版本冲突处理使用后端 `/api/memory/...` 接口。
+
+`frontend/` 仍保留为源码和构建验证目录，但不再是用户必须启动的独立入口，也不要求运行 `5173`。
+
+构建检查仍可执行：
 
 ```powershell
 Set-Location frontend
 npm ci
 npm run build
-npm run dev
 ```
 
-当前实测 `npm run build` 通过。Vite 开发服务器默认端口通常为 `5173`，接口地址由 `frontend/vite.config.js` 代理配置决定。
+当前实测 `npm run build` 通过。需要调试这套 Vue 源码时才启动 Vite；它不是完整语音系统的运行入口。
 
 ### 3.3 后端启动
 
@@ -100,7 +111,7 @@ python voice_server.py
 Invoke-RestMethod http://127.0.0.1:8502/health
 ```
 
-本次检查时 `8502` 没有运行进程，因此没有做真实页面或实时语音链路验收。Linux/macOS 的 `start_voice_only.sh` 依赖原机器的 SoulX、CUDA 和 bash 路径，不能当作 Windows 启动脚本。
+本次统一入口验收已使用隔离数据库启动 `8502`，登录后确认语音页面抽屉可打开“记忆管理”；桌面和 390×844 移动宽度均已截图检查，浏览器控制台无错误。该验收不等同于真实云语音端到端测试。Linux/macOS 的 `start_voice_only.sh` 依赖原机器的 SoulX、CUDA 和 bash 路径，不能当作 Windows 启动脚本。
 
 ### 3.4 Docker
 
@@ -194,9 +205,9 @@ Invoke-RestMethod http://127.0.0.1:8502/health
 | 检查 | 结果 |
 |---|---|
 | Python 版本 | 3.13.0；正式部署建议 3.11 |
-| `python -m pytest -q` | 通过：362 passed in 8.09s |
+| `python -m pytest -q` | 通过：411 passed in 13.56s |
 | `python -m compileall -q voice_server.py src tests` | 通过 |
 | `frontend/npm run build` | 通过 |
 | `docker compose config --quiet` | 通过 |
-| `http://127.0.0.1:8502/health` | 当前未启动，无法连接 |
+| `http://127.0.0.1:8502/health` | 隔离验证期间通过；验收结束后已停止 |
 | Git 状态/历史 | 当前目录无 `.git`，不可验证 |

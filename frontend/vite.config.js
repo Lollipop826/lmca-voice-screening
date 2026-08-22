@@ -10,6 +10,10 @@ export default defineConfig({
         target: process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:8502",
         changeOrigin: true,
       },
+      "/login": {
+        target: process.env.VITE_API_PROXY_TARGET || "http://127.0.0.1:8502",
+        changeOrigin: true,
+      },
     },
   },
 })

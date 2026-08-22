@@ -14,6 +14,7 @@ __all__ = [
     "MMSERecordRequest",
     "MemoryApiController",
     "MemoryItemDeleteRequest",
+    "MemoryItemVersionRequest",
     "MemoryItemUpdateRequest",
     "MemoryRevisionConflict",
     "MemoryUpdateRequest",
@@ -108,6 +109,12 @@ class MemoryItemUpdateRequest(BaseModel):
         return value
 
 
+class MemoryItemVersionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_version: int = Field(ge=1)
+
+
 class MemoryItemDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -196,6 +203,52 @@ class MemoryApiController:
                     detail="MEMORY_REVISION_NOT_SUPPORTED",
                 ) from exc
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @staticmethod
+    def _memory_item_view(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: item.get(key)
+            for key in (
+                "item_id", "category", "content", "status", "version",
+                "observed_at", "valid_until", "sensitivity", "confidence",
+                "created_at", "updated_at", "source",
+            )
+        }
+
+    @staticmethod
+    def _session_reflection_view(reflection: dict[str, Any]) -> dict[str, Any]:
+        view = {
+            key: reflection.get(key)
+            for key in (
+                "session_id", "status", "session_summary", "attempt_count",
+                "created_at", "updated_at", "completed_at",
+            )
+        }
+        if reflection.get("status") == "failed":
+            error = str(reflection.get("last_error") or "").lower()
+            if "timeout" in error or "timed out" in error:
+                reason = "模型服务响应超时"
+            elif any(token in error for token in ("json", "decode", "parse")):
+                reason = "模型返回格式异常"
+            elif any(token in error for token in ("evidence", "source_turn", "patient turn")):
+                reason = "摘要证据校验未通过"
+            else:
+                reason = "后台整理暂时不可用"
+            view["failure_reason"] = reason
+            view["next_retry_at"] = reflection.get("next_retry_at")
+        return view
+
+    def _call_memory_item(self, patient_id: str, item_id: str, method_name: str, *args, **kwargs):
+        try:
+            return self._call_memory(method_name, patient_id, item_id, *args, **kwargs)
+        except HTTPException as exc:
+            if exc.status_code == 409 and isinstance(exc.detail, dict):
+                try:
+                    current = self._call_memory("get_memory_item", patient_id, item_id)
+                    exc.detail["current_item"] = self._memory_item_view(current)
+                except HTTPException:
+                    pass
+            raise
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -254,7 +307,7 @@ class MemoryApiController:
             include_deleted=include_deleted,
             mode=mode,
         )
-        return {"success": True, "items": items}
+        return {"success": True, "items": [self._memory_item_view(item) for item in items]}
 
     async def update_memory_item(
         self,
@@ -264,10 +317,10 @@ class MemoryApiController:
         request: Request,
     ):
         patient_id = self._authorize(request, patient_id, "write")
-        item = self._call_memory(
-            "update_memory_item",
+        item = self._call_memory_item(
             patient_id,
             item_id,
+            "update_memory_item",
             payload.content,
             payload.expected_version,
             updated_by="user",
@@ -278,7 +331,49 @@ class MemoryApiController:
             "memory_item_updated",
             item,
         )
-        return {"success": True, "item": item}
+        return {"success": True, "item": self._memory_item_view(item)}
+
+    async def confirm_memory_item(
+        self,
+        patient_id: PatientId,
+        item_id: str,
+        payload: MemoryItemVersionRequest,
+        request: Request,
+    ):
+        patient_id = self._authorize(request, patient_id, "write")
+        item = self._call_memory_item(
+            patient_id, item_id, "confirm_memory_item", payload.expected_version, confirmed_by="user"
+        )
+        self._audit_memory_item(request, patient_id, "memory_item_confirmed", item)
+        return {"success": True, "item": self._memory_item_view(item)}
+
+    async def reject_memory_item(
+        self,
+        patient_id: PatientId,
+        item_id: str,
+        payload: MemoryItemVersionRequest,
+        request: Request,
+    ):
+        patient_id = self._authorize(request, patient_id, "write")
+        item = self._call_memory_item(
+            patient_id, item_id, "reject_memory_item", payload.expected_version, rejected_by="user"
+        )
+        self._audit_memory_item(request, patient_id, "memory_item_rejected", item)
+        return {"success": True, "item": self._memory_item_view(item)}
+
+    async def stop_memory_item(
+        self,
+        patient_id: PatientId,
+        item_id: str,
+        payload: MemoryItemVersionRequest,
+        request: Request,
+    ):
+        patient_id = self._authorize(request, patient_id, "write")
+        item = self._call_memory_item(
+            patient_id, item_id, "stop_memory_item", payload.expected_version, stopped_by="user"
+        )
+        self._audit_memory_item(request, patient_id, "memory_item_stopped", item)
+        return {"success": True, "item": self._memory_item_view(item)}
 
     async def delete_memory_item(
         self,
@@ -290,10 +385,10 @@ class MemoryApiController:
         if not _enabled("ENABLE_PATIENT_MEMORY_DELETE"):
             raise HTTPException(status_code=403, detail="MEMORY_DELETE_DISABLED")
         patient_id = self._authorize(request, patient_id, "write")
-        item = self._call_memory(
-            "delete_memory_item",
+        item = self._call_memory_item(
             patient_id,
             item_id,
+            "delete_memory_item",
             payload.expected_version,
             payload.deletion_token,
             deleted_by="user",
@@ -304,7 +399,7 @@ class MemoryApiController:
             "memory_item_deleted",
             item,
         )
-        return {"success": True, "item": item}
+        return {"success": True, "item": self._memory_item_view(item)}
 
     async def get_patient_memory(
         self,
@@ -339,6 +434,35 @@ class MemoryApiController:
             session_id=session_id,
         )
         return {"success": True, "data": trajectory}
+
+    async def get_session_reflection(
+        self,
+        patient_id: PatientId,
+        request: Request,
+        session_id: str = Query(min_length=1, max_length=120),
+    ):
+        patient_id = self._authorize(request, patient_id, "read")
+        reflection = self._call_memory(
+            "get_session_reflection",
+            patient_id,
+            session_id.strip(),
+        )
+        data = self._session_reflection_view(reflection)
+        if reflection.get("status") != "succeeded":
+            previous = self._call_memory(
+                "get_latest_session_reflection",
+                patient_id,
+                exclude_session_id=session_id.strip(),
+            )
+            data["previous_reflection"] = (
+                self._session_reflection_view(previous)
+                if previous.get("status") != "missing"
+                else None
+            )
+        return {
+            "success": True,
+            "data": data,
+        }
 
     async def update_patient_memory(
         self,
@@ -407,6 +531,12 @@ class MemoryApiController:
                 "get_emotion_trajectory",
             ),
             (
+                "/api/memory/{patient_id}/session-reflection",
+                self.get_session_reflection,
+                ["GET"],
+                "get_session_reflection",
+            ),
+            (
                 "/api/memory/{patient_id}/items",
                 self.list_memory_items,
                 ["GET"],
@@ -417,6 +547,24 @@ class MemoryApiController:
                 self.update_memory_item,
                 ["PATCH"],
                 "patch_memory_item",
+            ),
+            (
+                "/api/memory/{patient_id}/items/{item_id}/confirm",
+                self.confirm_memory_item,
+                ["POST"],
+                "confirm_memory_item",
+            ),
+            (
+                "/api/memory/{patient_id}/items/{item_id}/reject",
+                self.reject_memory_item,
+                ["POST"],
+                "reject_memory_item",
+            ),
+            (
+                "/api/memory/{patient_id}/items/{item_id}/stop-using",
+                self.stop_memory_item,
+                ["POST"],
+                "stop_memory_item",
             ),
             (
                 "/api/memory/{patient_id}/items/{item_id}",

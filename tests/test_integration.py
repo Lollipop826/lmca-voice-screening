@@ -50,8 +50,12 @@ def test_memory_api_exposes_view_edit_mmse_and_comfort_routes(tmp_path: Path):
 
     assert "/api/memory/{patient_id}" in paths
     assert "/api/memory/{patient_id}/context" in paths
+    assert "/api/memory/{patient_id}/session-reflection" in paths
     assert "/api/memory/{patient_id}/items" in paths
     assert "/api/memory/{patient_id}/items/{item_id}" in paths
+    assert "/api/memory/{patient_id}/items/{item_id}/confirm" in paths
+    assert "/api/memory/{patient_id}/items/{item_id}/reject" in paths
+    assert "/api/memory/{patient_id}/items/{item_id}/stop-using" in paths
     assert "/api/memory/{patient_id}/mmse" in paths
     assert "/api/memory/{patient_id}/comfort-strategies" in paths
 

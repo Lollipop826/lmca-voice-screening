@@ -1504,6 +1504,7 @@ class PatientMemoryService:
         if not callable(consolidator):
             self._log("[EmotionMemory] ⚠️ 新记忆整理接口不可用")
             return False
+        reflector = getattr(type(self._long_term_memory), "reflect_session", None)
         key = (patient_id, session_id)
         with self._consolidation_lock:
             if key in self._pending_consolidations:
@@ -1512,9 +1513,15 @@ class PatientMemoryService:
 
         def run() -> None:
             try:
-                consolidator(patient_id, session_id=session_id)
-            except Exception as exc:
-                self._log(f"[EmotionMemory] ⚠️ 增量整理失败: {type(exc).__name__}")
+                try:
+                    consolidator(patient_id, session_id=session_id)
+                except Exception as exc:
+                    self._log(f"[EmotionMemory] ⚠️ 增量整理失败: {type(exc).__name__}")
+                if callable(reflector):
+                    try:
+                        self._long_term_memory.reflect_session(patient_id, session_id)
+                    except Exception as exc:
+                        self._log(f"[EmotionMemory] ⚠️ 会话反思失败: {type(exc).__name__}")
             finally:
                 with self._consolidation_lock:
                     self._pending_consolidations.discard(key)

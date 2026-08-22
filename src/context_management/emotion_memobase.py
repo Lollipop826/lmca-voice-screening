@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -71,6 +72,8 @@ _TURN_TABLE = "emotion_memobase_turns"
 _SYNC_TABLE = "emotion_memobase_sync_state"
 _MEMORY_ITEM_TABLE = "emotion_memobase_memory_items"
 _MEMORY_DELETION_TABLE = "emotion_memobase_memory_deletions"
+_MIRROR_OP_TABLE = "emotion_memobase_mirror_ops"
+_SESSION_REFLECTION_TABLE = "emotion_memobase_session_reflections"
 _MAX_EMOTION_HISTORY = 30
 _MAX_MMSE_HISTORY = 50
 _MAX_TURNS_IN_SNAPSHOT = 50
@@ -85,11 +88,57 @@ _EVENT_GIST_TIME_RANGE_DAYS = os.getenv("MEMOBASE_EVENT_GIST_TIME_RANGE_DAYS", "
 _LONG_TERM_EVENT_TOKEN_BUDGET = int(
     os.getenv("LONG_TERM_EVENT_TOKEN_BUDGET", "900")
 )
+_AUTHORITATIVE_CARD_TOKEN_BUDGET = 900
+_LOCAL_FALLBACK_ITEM_LIMIT = 3
 _SYNC_LEASE_SECONDS = 60
 _SYNC_RETRY_MAX_SECONDS = 300
+_REFLECTION_LEASE_SECONDS = 120
+_REFLECTION_RETRY_SECONDS = 60
 _CONSOLIDATABLE_FIELDS = {
     "facts", "preferences", "events", "comfort_strategies", "narrative"
 }
+_REFLECTION_CATEGORIES = {
+    "facts", "preferences", "events", "emotional_triggers", "boundaries",
+    "comfort_strategies",
+}
+_REFLECTION_OPERATIONS = {"ADD", "SUPERSEDE", "CANDIDATE", "NOOP", "BLOCK"}
+_TEMPORARY_SCOPE_MARKERS = (
+    "现在", "今天", "今晚", "这次", "暂时", "先别", "这几天", "这两天",
+    "本周", "近期", "这阵子", "过几天", "几天后", "明天", "下周", "下月",
+    "下个月", "以后", "之后",
+)
+_TEMPORARY_REFUSAL_MARKERS = ("不想", "不愿", "不要", "先别", "暂时", "别聊")
+_UNCERTAINTY_MARKERS = ("可能", "也许", "好像", "不太确定", "不确定", "记得", "似乎")
+_CORRECTION_MARKERS = ("不是", "改成", "记错", "搬到", "改为")
+_NEGATED_NON_MEMORY_TERMS = (
+    "失眠", "睡不着", "害怕", "不怕", "恐惧", "吵架", "争吵",
+    "伤害自己", "自伤", "自杀", "危机",
+)
+_STRONG_NEGATION_MARKERS = ("没有", "没", "未", "不怕", "不失眠", "从未")
+_EPHEMERAL_CONTEXT_MARKERS = ("刚", "刚刚", "今天", "上午", "下午", "早饭", "喝水", "天气")
+_LONG_TERM_SEMANTIC_MARKERS = (
+    "喜欢", "不喜欢", "希望", "不想", "不要", "不能", "住", "姓", "叫",
+    "女儿", "儿子", "家人", "害怕", "担心", "难过", "检查", "复查", "睡",
+    "药", "参加", "照顾", "关系", "下结论", "出门",
+)
+_AFFECTIVE_MARKERS = (
+    "担心", "担忧", "害怕", "恐惧", "难过", "难受", "伤心", "焦虑",
+    "开心", "高兴", "平静", "安心", "生气", "烦", "发抖", "哭",
+)
+
+
+def _direct_non_memory_denial(text: str) -> bool:
+    """Reject only an explicit denial scoped directly to a symptom/event/crisis."""
+    for term in _NEGATED_NON_MEMORY_TERMS:
+        if re.search(rf"(?:没有|没|未|从未|不曾|不是|并非)"
+                     rf"(?!想到|想过|意识到|料到)[^，。！？；]{{0,6}}"
+                     rf"{re.escape(term)}", text):
+            return True
+    if re.search(r"(?:不怕|不失眠|不自杀|不自伤)", text):
+        return True
+    if re.search(r"(?:不|不太)(?:会|曾|再)?(?:害怕|失眠|睡不着|吵架|争吵|危机)", text):
+        return True
+    return False
 
 _LOCKS: dict[str, threading.RLock] = {}
 _LOCKS_GUARD = threading.Lock()
@@ -117,6 +166,70 @@ def _token_estimate(text: str) -> int:
     return max(1, (len(str(text or "")) + 1) // 2)
 
 
+def _memory_item_is_current(item: Mapping[str, Any]) -> bool:
+    if str(item.get("status") or "").lower() != "active":
+        return False
+    valid_until = str(item.get("valid_until") or "").strip()
+    if not valid_until:
+        return True
+    try:
+        if "T" not in valid_until and " " not in valid_until:
+            return datetime.fromisoformat(valid_until).date() >= datetime.now().date()
+        expires_at = datetime.fromisoformat(valid_until.replace("Z", "+00:00"))
+        now = datetime.now(expires_at.tzinfo) if expires_at.tzinfo else datetime.now()
+        return expires_at >= now
+    except ValueError:
+        return False
+
+
+def _budgeted_values(values: list[str], token_budget: int, item_limit: int) -> list[str]:
+    selected: list[str] = []
+    used = 0
+    for value in values:
+        text = _clip(value, item_limit)
+        cost = _token_estimate(text)
+        if not text or used + cost > token_budget:
+            continue
+        selected.append(text)
+        used += cost
+    return selected
+
+
+def _emotion_trend(history: Any) -> str:
+    entries = [
+        item for item in history or []
+        if isinstance(item, Mapping)
+        and str(item.get("analysis_status") or "final") == "final"
+        and str(item.get("dominant") or "unknown") not in {"unknown", "unavailable"}
+    ][-5:]
+    if len(entries) < 2:
+        return ""
+    try:
+        valence_change = float(entries[-1].get("valence") or 0.0) - float(
+            entries[0].get("valence") or 0.0
+        )
+        arousal_change = float(entries[-1].get("arousal") or 0.0) - float(
+            entries[0].get("arousal") or 0.0
+        )
+    except (TypeError, ValueError):
+        return ""
+    if valence_change >= 0.2:
+        return "好转"
+    if valence_change <= -0.2:
+        return "加重"
+    if arousal_change <= -0.2:
+        return "趋稳"
+    if arousal_change >= 0.2:
+        return "唤醒升高"
+    return "平稳"
+
+
+def _local_fallback_enabled() -> bool:
+    return os.getenv("MEMORY_LOCAL_FALLBACK_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
 def _is_local_memobase_url(value: str) -> bool:
     parsed = urlparse(str(value or "").strip())
     return parsed.scheme == "http" and parsed.hostname in {
@@ -132,6 +245,18 @@ def _json_copy(value: Any) -> Any:
         return json.loads(json.dumps(value, ensure_ascii=False))
     except (TypeError, ValueError) as exc:
         raise ValueError("memory update must be JSON serializable") from exc
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
+    return {}
 
 
 def _strings(values: Any) -> list[str]:
@@ -160,7 +285,7 @@ def _dominant_emotion(scores: Mapping[str, Any]) -> str:
     }
     highest = max(values.values(), default=0.0)
     if highest <= 0 or max(values.values()) - min(values.values()) < 1e-9:
-        return "calm"
+        return "unknown"
     return max(values, key=values.get)
 
 
@@ -207,7 +332,7 @@ def _normalise_emotion(scores: Mapping[str, Any]) -> dict[str, float]:
             values[name] = 0.0
     total = sum(values.values())
     if total <= 0:
-        return {name: 1.0 / len(_EMOTIONS) for name in _EMOTIONS}
+        return {}
     return {name: value / total for name, value in values.items()}
 
 
@@ -355,7 +480,9 @@ def _events_overlap(first: Any, second: Any) -> bool:
 
 
 def _event_is_user_managed(item: Any) -> bool:
-    return isinstance(item, Mapping) and str(item.get("source") or "").lower() in {"manual", "user"}
+    return isinstance(item, Mapping) and str(item.get("source") or "").lower() in {
+        "manual", "user", "user_direct", "user_correction", "clinician_confirmed",
+    }
 
 
 def _merge_equivalent_events(first: Any, second: Any) -> dict[str, Any]:
@@ -455,7 +582,10 @@ def _superseded_turn_ids(snapshot: Mapping[str, Any]) -> set[str]:
             values = item.get("evidence_turn_ids") or []
             if not isinstance(values, (list, tuple, set)):
                 values = [values]
-            if status in {"deleted", "superseded"} or (status == "active" and source == "manual"):
+            if status in {"deleted", "superseded", "blocked"} or (
+                status == "active"
+                and source in {"manual", "user", "user_direct", "user_correction", "clinician_confirmed"}
+            ):
                 result.update(str(value).strip() for value in values if str(value).strip())
                 source_turn = str(item.get("source_turn_id") or "").strip()
                 if source_turn:
@@ -476,6 +606,7 @@ class EmotionMemobase:
         storage_path: Optional[str] = None,
         memobase_client: Any = None,
         emotion_classifier: Optional[Callable[[str], Any]] = None,
+        session_reflector: Optional[Callable[[str], Any]] = None,
         memobase: Any = None,
         logger: Callable[[str], Any] = print,
     ) -> None:
@@ -501,6 +632,7 @@ class EmotionMemobase:
             except Exception:
                 pass
         self._emotion_classifier = emotion_classifier
+        self._session_reflector = session_reflector
         self._memobase = memobase_client if memobase_client is not None else memobase
         self._memobase_auto = self._memobase is None and bool(
             os.getenv("MEMOBASE_PROJECT_URL") and os.getenv("MEMOBASE_API_KEY")
@@ -584,6 +716,8 @@ class EmotionMemobase:
                     turn_id TEXT NOT NULL DEFAULT '',
                     turn_state TEXT NOT NULL DEFAULT 'DURABLY_CAPTURED',
                     response_status TEXT NOT NULL DEFAULT 'responded',
+                    consolidation_status TEXT NOT NULL DEFAULT 'pending',
+                    consolidated_at TEXT,
                     user_message TEXT NOT NULL,
                     assistant_message TEXT NOT NULL,
                     emotion_json TEXT NOT NULL,
@@ -615,7 +749,16 @@ class EmotionMemobase:
                     status TEXT NOT NULL DEFAULT 'active',
                     deleted_at TEXT,
                     updated_at TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    slot_key TEXT,
+                    observed_at TEXT,
+                    valid_until TEXT,
+                    sensitivity TEXT NOT NULL DEFAULT 'normal',
+                    confidence REAL,
+                    confirmed_by TEXT,
+                    evidence_json TEXT,
+                    supersedes_item_id TEXT,
+                    metadata_json TEXT
                 );
                 CREATE TABLE IF NOT EXISTS {_MEMORY_DELETION_TABLE} (
                     item_id TEXT PRIMARY KEY,
@@ -625,10 +768,43 @@ class EmotionMemobase:
                     deleted_at TEXT NOT NULL,
                     item_version INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS {_MIRROR_OP_TABLE} (
+                    op_id TEXT PRIMARY KEY,
+                    patient_id TEXT NOT NULL,
+                    item_id TEXT NOT NULL,
+                    item_version INTEGER NOT NULL,
+                    op_type TEXT NOT NULL,
+                    source_turn_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at TEXT,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS {_SESSION_REFLECTION_TABLE} (
+                    patient_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    session_summary TEXT,
+                    summary_evidence_json TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at TEXT,
+                    last_error TEXT,
+                    lease_until TEXT,
+                    lease_token TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    PRIMARY KEY (patient_id, session_id)
+                );
                 CREATE INDEX IF NOT EXISTS idx_{_MEMORY_ITEM_TABLE}_patient_status
                     ON {_MEMORY_ITEM_TABLE}(patient_id, status, updated_at);
                 CREATE INDEX IF NOT EXISTS idx_{_MEMORY_ITEM_TABLE}_patient_mode
                     ON {_MEMORY_ITEM_TABLE}(patient_id, mode, status);
+                CREATE INDEX IF NOT EXISTS idx_{_MIRROR_OP_TABLE}_pending
+                    ON {_MIRROR_OP_TABLE}(status, next_retry_at, updated_at);
                 CREATE TABLE IF NOT EXISTS emotion_trajectory (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     patient_id TEXT NOT NULL,
@@ -664,8 +840,22 @@ class EmotionMemobase:
                 ("turn_id", "TEXT NOT NULL DEFAULT ''"),
                 ("turn_state", "TEXT NOT NULL DEFAULT 'DURABLY_CAPTURED'"),
                 ("response_status", "TEXT NOT NULL DEFAULT 'responded'"),
+                ("consolidation_status", "TEXT NOT NULL DEFAULT 'pending'"),
+                ("consolidated_at", "TEXT"),
             ):
                 self._ensure_column(conn, _TURN_TABLE, column, definition)
+            for column, definition in (
+                ("slot_key", "TEXT"),
+                ("observed_at", "TEXT"),
+                ("valid_until", "TEXT"),
+                ("sensitivity", "TEXT NOT NULL DEFAULT 'normal'"),
+                ("confidence", "REAL"),
+                ("confirmed_by", "TEXT"),
+                ("evidence_json", "TEXT"),
+                ("supersedes_item_id", "TEXT"),
+                ("metadata_json", "TEXT"),
+            ):
+                self._ensure_column(conn, _MEMORY_ITEM_TABLE, column, definition)
             for column, definition in (
                 ("turn_id", "TEXT NOT NULL DEFAULT ''"),
                 ("analysis_status", "TEXT NOT NULL DEFAULT 'final'"),
@@ -678,6 +868,21 @@ class EmotionMemobase:
                 ("lease_until", "TEXT"),
             ):
                 self._ensure_column(conn, _SYNC_TABLE, column, definition)
+            for column, definition in (
+                ("session_summary", "TEXT"),
+                ("summary_evidence_json", "TEXT"),
+                ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("next_retry_at", "TEXT"),
+                ("last_error", "TEXT"),
+                ("lease_until", "TEXT"),
+                ("lease_token", "TEXT"),
+                ("completed_at", "TEXT"),
+            ):
+                self._ensure_column(conn, _SESSION_REFLECTION_TABLE, column, definition)
+            conn.execute(
+                f"""CREATE INDEX IF NOT EXISTS idx_{_SESSION_REFLECTION_TABLE}_pending
+                    ON {_SESSION_REFLECTION_TABLE}(status, next_retry_at, updated_at)"""
+            )
             conn.execute(
                 f"UPDATE {_TURN_TABLE} SET turn_id='legacy:' || id WHERE turn_id IS NULL OR turn_id=''"
             )
@@ -695,6 +900,43 @@ class EmotionMemobase:
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_emotion_trajectory_patient_turn "
                 "ON emotion_trajectory(patient_id, COALESCE(session_id, ''), turn_id)"
             )
+            conn.execute(
+                f"UPDATE {_MEMORY_ITEM_TABLE} SET source='legacy_migrated' "
+                "WHERE source IS NULL OR TRIM(source)='' OR source='derived'"
+            )
+            self._migrate_legacy_memory(conn)
+
+    def _migrate_legacy_memory(self, conn: sqlite3.Connection) -> None:
+        """Backfill missing items once while preserving existing item state."""
+        rows = conn.execute(
+            f"SELECT patient_id, snapshot_json FROM {_SNAPSHOT_TABLE}"
+        ).fetchall()
+        for row in rows:
+            patient_id = str(row["patient_id"])
+            try:
+                raw = json.loads(row["snapshot_json"] or "{}")
+            except json.JSONDecodeError:
+                raw = {}
+            self._sync_memory_items_from_snapshot(
+                conn,
+                patient_id,
+                _normalise_snapshot(patient_id, raw),
+            )
+        conn.execute(
+            f"""UPDATE {_TURN_TABLE} AS turns
+                SET consolidation_status='consolidated',
+                    consolidated_at=COALESCE(consolidated_at, ?)
+                WHERE consolidation_status='pending'
+                  AND EXISTS (
+                    SELECT 1 FROM {_MEMORY_ITEM_TABLE} AS items
+                    WHERE items.patient_id=turns.patient_id
+                      AND (
+                        items.source_turn_id=CAST(turns.id AS TEXT)
+                        OR items.source_turn_id=turns.turn_id
+                      )
+                  )""",
+            (_now(),),
+        )
 
     @staticmethod
     def _memory_item_row(row: sqlite3.Row | Mapping[str, Any]) -> dict[str, Any]:
@@ -706,10 +948,18 @@ class EmotionMemobase:
 
     def _deleted_item_ids(self, conn: sqlite3.Connection, patient_id: str) -> set[str]:
         rows = conn.execute(
-            f"SELECT item_id FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND status='deleted'",
+            f"SELECT item_id FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND status<>'active'",
             (patient_id,),
         ).fetchall()
-        return {str(row["item_id"]) for row in rows}
+        result = {str(row["item_id"]) for row in rows}
+        result.update(
+            str(row["item_id"])
+            for row in conn.execute(
+                f"SELECT item_id FROM {_MEMORY_DELETION_TABLE} WHERE patient_id=?",
+                (patient_id,),
+            ).fetchall()
+        )
+        return result
 
     def _deleted_texts_by_category(
         self,
@@ -718,7 +968,7 @@ class EmotionMemobase:
     ) -> dict[str, set[str]]:
         rows = conn.execute(
             f"""SELECT category, content FROM {_MEMORY_ITEM_TABLE}
-                WHERE patient_id=? AND status='deleted' AND content<>''""",
+                WHERE patient_id=? AND status<>'active' AND content<>''""",
             (patient_id,),
         ).fetchall()
         result: dict[str, set[str]] = {}
@@ -729,7 +979,7 @@ class EmotionMemobase:
     def _deleted_turn_ids(self, conn: sqlite3.Connection, patient_id: str) -> set[str]:
         rows = conn.execute(
             f"""SELECT source_turn_id FROM {_MEMORY_ITEM_TABLE}
-                WHERE patient_id=? AND status='deleted'
+                WHERE patient_id=? AND status<>'active'
                   AND COALESCE(source_turn_id, '')<>''""",
             (patient_id,),
         ).fetchall()
@@ -782,6 +1032,7 @@ class EmotionMemobase:
         *,
         mode: str = WELLBEING,
     ) -> None:
+        """Backfill items from a legacy snapshot without overwriting item state."""
         now = _now()
         deleted = self._deleted_item_ids(conn, patient_id)
         for category in ("facts", "preferences", "events", "comfort_strategies"):
@@ -794,27 +1045,60 @@ class EmotionMemobase:
                     continue
                 if isinstance(item, Mapping) and str(item.get("status") or "active").lower() != "active":
                     continue
-                source = "derived"
+                source = "legacy_migrated"
                 source_session_id = None
                 source_turn_id = None
+                slot_key = None
+                observed_at = None
+                valid_until = None
+                sensitivity = "normal"
+                confidence = None
+                confirmed_by = None
+                supersedes_item_id = None
+                metadata: dict[str, Any] = {}
+                evidence: list[Any] = []
                 created_at = now
                 updated_at = now
                 if isinstance(item, Mapping):
                     source = str(item.get("source") or source).strip() or source
+                    if source in {"derived", "manual", "user"}:
+                        source = "legacy_migrated" if source == "derived" else "user_direct"
                     source_session_id = str(item.get("source_session_id") or "").strip() or None
                     source_turn_id = str(item.get("source_turn_id") or "").strip() or None
                     if not source_turn_id:
                         evidence = item.get("evidence_turn_ids") or []
                         if isinstance(evidence, (list, tuple)) and evidence:
                             source_turn_id = str(evidence[0] or "").strip() or None
+                    else:
+                        evidence = item.get("evidence_turn_ids") or []
+                    slot_key = str(item.get("slot_key") or "").strip() or None
+                    observed_at = str(item.get("observed_at") or "").strip() or None
+                    valid_until = str(item.get("valid_until") or "").strip() or None
+                    sensitivity = str(item.get("sensitivity") or "normal").strip().lower()
+                    if sensitivity not in {"normal", "sensitive", "high"}:
+                        sensitivity = "normal"
+                    try:
+                        confidence = float(item["confidence"]) if item.get("confidence") is not None else None
+                    except (TypeError, ValueError):
+                        confidence = None
+                    confirmed_by = str(item.get("confirmed_by") or "").strip() or None
+                    supersedes_item_id = str(item.get("supersedes_item_id") or "").strip() or None
+                    metadata = _json_object(item.get("metadata_json") or item.get("metadata"))
+                    if category == "comfort_strategies" and "effective" in item:
+                        metadata.setdefault("effective", item.get("effective"))
+                    if category == "comfort_strategies" and "use_count" in item:
+                        metadata.setdefault("use_count", item.get("use_count"))
                     created_at = str(item.get("created_at") or now)
                     updated_at = str(item.get("updated_at") or now)
                 conn.execute(
                     f"""INSERT OR IGNORE INTO {_MEMORY_ITEM_TABLE}
                         (item_id, patient_id, mode, category, content, source,
                          source_session_id, source_turn_id, version, status,
-                         deleted_at, updated_at, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', NULL, ?, ?)""",
+                         deleted_at, updated_at, created_at, slot_key, observed_at,
+                         valid_until, sensitivity, confidence, confirmed_by,
+                         evidence_json, supersedes_item_id, metadata_json)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', NULL, ?, ?,
+                                ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         item_id,
                         patient_id,
@@ -826,30 +1110,29 @@ class EmotionMemobase:
                         source_turn_id,
                         updated_at,
                         created_at,
+                        slot_key,
+                        observed_at,
+                        valid_until,
+                        sensitivity,
+                        confidence,
+                        confirmed_by,
+                        json.dumps(
+                            [{"turn_id": str(value).strip()} for value in evidence if str(value).strip()],
+                            ensure_ascii=False,
+                        ) if evidence else None,
+                        supersedes_item_id,
+                        json.dumps(metadata, ensure_ascii=False, sort_keys=True) if metadata else None,
                     ),
                 )
                 current = conn.execute(
-                    f"SELECT content, source, source_session_id, source_turn_id, status, version "
-                    f"FROM {_MEMORY_ITEM_TABLE} WHERE item_id=?",
+                    f"SELECT metadata_json FROM {_MEMORY_ITEM_TABLE} WHERE item_id=?",
                     (item_id,),
                 ).fetchone()
-                if current and str(current["status"] or "").lower() == "active" and str(current["content"] or "") != text:
+                if current and not current["metadata_json"] and metadata:
                     conn.execute(
-                        f"""UPDATE {_MEMORY_ITEM_TABLE}
-                            SET content=?, source=?, source_session_id=?, source_turn_id=?,
-                                version=?, updated_at=?
-                            WHERE item_id=?""",
-                        (
-                            text,
-                            source,
-                            source_session_id,
-                            source_turn_id,
-                            int(current["version"] or 0) + 1,
-                            updated_at,
-                            item_id,
-                        ),
+                        f"UPDATE {_MEMORY_ITEM_TABLE} SET metadata_json=? WHERE item_id=?",
+                        (json.dumps(metadata, ensure_ascii=False, sort_keys=True), item_id),
                     )
-        self._suppress_redundant_event_items(conn, patient_id, mode)
 
     def _snapshot_with_deleted_filtered(
         self,
@@ -890,8 +1173,280 @@ class EmotionMemobase:
         result: dict[str, list[dict[str, Any]]] = {}
         for row in conn.execute(query, tuple(params)).fetchall():
             item = self._memory_item_row(row)
+            if not _memory_item_is_current(item):
+                continue
             result.setdefault(str(item["category"]), []).append(item)
         return result
+
+    @staticmethod
+    def _snapshot_item_projection(item: Mapping[str, Any]) -> dict[str, Any]:
+        result = dict(item)
+        result["id"] = result.get("item_id")
+        result["text"] = result.get("content")
+        evidence = result.get("evidence_json")
+        try:
+            evidence = json.loads(evidence or "[]")
+        except json.JSONDecodeError:
+            evidence = []
+        if isinstance(evidence, list):
+            result["evidence_turn_ids"] = [
+                str(item.get("turn_id") or "").strip()
+                for item in evidence
+                if isinstance(item, Mapping) and str(item.get("turn_id") or "").strip()
+            ]
+        if result.get("category") == "comfort_strategies":
+            metadata = _json_object(result.get("metadata_json"))
+            result["strategy"] = result.get("content")
+            result["effective"] = metadata.get("effective")
+            if "use_count" in metadata:
+                result["use_count"] = metadata["use_count"]
+        return result
+
+    def _snapshot_from_items(
+        self,
+        conn: sqlite3.Connection,
+        snapshot: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        result = _normalise_snapshot(str(snapshot["patient_id"]), snapshot)
+        items = self._active_items_by_category(
+            conn,
+            str(result["patient_id"]),
+            mode=WELLBEING,
+        )
+        for category in ("facts", "preferences", "events", "comfort_strategies"):
+            result[category] = [
+                self._snapshot_item_projection(item)
+                for item in items.get(category, [])
+            ]
+        return result
+
+    @staticmethod
+    def _item_evidence_json(item: Mapping[str, Any]) -> Optional[str]:
+        raw = item.get("evidence_json")
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return json.dumps(parsed, ensure_ascii=False)
+        values = item.get("evidence")
+        if values is None:
+            values = item.get("evidence_turn_ids") or []
+        if not isinstance(values, (list, tuple, set)):
+            values = [values]
+        evidence = []
+        for value in values:
+            if isinstance(value, Mapping):
+                turn_id = str(value.get("turn_id") or value.get("source_turn_id") or "").strip()
+                quote = str(value.get("quote") or "").strip()
+                if turn_id:
+                    entry = {"turn_id": turn_id}
+                    if quote:
+                        entry["quote"] = quote
+                    evidence.append(entry)
+            else:
+                turn_id = str(value or "").strip()
+                if turn_id:
+                    evidence.append({"turn_id": turn_id})
+        return json.dumps(evidence, ensure_ascii=False) if evidence else None
+
+    def _insert_memory_item(
+        self,
+        conn: sqlite3.Connection,
+        patient_id: str,
+        category: str,
+        content: str,
+        *,
+        item_id: Optional[str] = None,
+        mode: str = WELLBEING,
+        source: str = "system_inferred",
+        source_session_id: Optional[str] = None,
+        source_turn_id: Optional[str] = None,
+        version: int = 1,
+        status: str = "active",
+        deleted_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+        created_at: Optional[str] = None,
+        slot_key: Optional[str] = None,
+        observed_at: Optional[str] = None,
+        valid_until: Optional[str] = None,
+        sensitivity: str = "normal",
+        confidence: Optional[float] = None,
+        confirmed_by: Optional[str] = None,
+        evidence_json: Optional[str] = None,
+        supersedes_item_id: Optional[str] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> str:
+        now = _now()
+        item_id = str(item_id or uuid.uuid4().hex)
+        updated_at = str(updated_at or now)
+        created_at = str(created_at or now)
+        sensitivity = str(sensitivity or "normal").strip().lower()
+        if sensitivity not in {"normal", "sensitive", "high"}:
+            sensitivity = "normal"
+        conn.execute(
+            f"""INSERT INTO {_MEMORY_ITEM_TABLE} (
+                    item_id, patient_id, mode, category, content, source,
+                    source_session_id, source_turn_id, version, status, deleted_at,
+                    updated_at, created_at, slot_key, observed_at, valid_until,
+                    sensitivity, confidence, confirmed_by, evidence_json,
+                    supersedes_item_id, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                item_id,
+                patient_id,
+                normalize_session_mode(mode),
+                category,
+                content,
+                source,
+                source_session_id,
+                source_turn_id,
+                int(version),
+                status,
+                deleted_at,
+                updated_at,
+                created_at,
+                slot_key,
+                observed_at,
+                valid_until,
+                sensitivity,
+                confidence,
+                confirmed_by,
+                evidence_json,
+                supersedes_item_id,
+                json.dumps(dict(metadata), ensure_ascii=False, sort_keys=True) if metadata else None,
+            ),
+        )
+        return item_id
+
+    def _replace_user_memory_category(
+        self,
+        conn: sqlite3.Connection,
+        patient_id: str,
+        category: str,
+        values: list[Any],
+        *,
+        updated_by: str,
+    ) -> None:
+        rows = [
+            self._memory_item_row(row)
+            for row in conn.execute(
+                f"""SELECT * FROM {_MEMORY_ITEM_TABLE}
+                    WHERE patient_id=? AND mode=? AND category=? AND status='active'
+                    ORDER BY created_at ASC, item_id ASC""",
+                (patient_id, normalize_session_mode(WELLBEING), category),
+            ).fetchall()
+        ]
+        by_id = {str(row["item_id"]): row for row in rows}
+        by_slot = {
+            str(row["slot_key"]): row
+            for row in rows
+            if str(row.get("slot_key") or "").strip()
+        }
+        matched: set[str] = set()
+        for index, raw in enumerate(values):
+            entry = dict(raw) if isinstance(raw, Mapping) else {"text": raw}
+            text = _memory_item_text(entry)
+            if not text:
+                raise ValueError(f"{category} cannot contain blank items")
+            requested_id = str(entry.get("item_id") or entry.get("id") or "").strip()
+            slot_key = str(entry.get("slot_key") or "").strip() or None
+            current = by_id.get(requested_id) if requested_id else None
+            if current is None and slot_key:
+                current = by_slot.get(slot_key)
+            if current is None and index < len(rows):
+                candidate = rows[index]
+                if str(candidate["item_id"]) not in matched:
+                    current = candidate
+            if current is not None:
+                matched.add(str(current["item_id"]))
+                if str(current["content"]) == text:
+                    continue
+                now = _now()
+                old_version = int(current["version"] or 0) + 1
+                conn.execute(
+                    f"""UPDATE {_MEMORY_ITEM_TABLE}
+                        SET status='superseded', version=?, updated_at=?
+                        WHERE patient_id=? AND item_id=? AND status='active'""",
+                    (old_version, now, patient_id, current["item_id"]),
+                )
+                self._enqueue_mirror_op(
+                    conn,
+                    patient_id,
+                    str(current["item_id"]),
+                    old_version,
+                    "invalidate",
+                    str(current.get("source_turn_id") or "") or None,
+                )
+                source = "user_correction"
+                supersedes_item_id = str(current["item_id"])
+                new_item_id = None
+            else:
+                source = "user_direct"
+                supersedes_item_id = None
+                new_item_id = requested_id or None
+                if new_item_id and new_item_id in by_id:
+                    new_item_id = None
+            metadata = _json_object(entry.get("metadata_json") or entry.get("metadata"))
+            if category == "comfort_strategies" and "effective" in entry:
+                metadata["effective"] = entry["effective"]
+            evidence_json = self._item_evidence_json(entry)
+            source_turn_id = str(entry.get("source_turn_id") or "").strip() or None
+            if not source_turn_id:
+                try:
+                    evidence = json.loads(evidence_json or "[]")
+                except json.JSONDecodeError:
+                    evidence = []
+                if evidence:
+                    source_turn_id = str(evidence[0].get("turn_id") or "").strip() or None
+            inherited_slot = str(current.get("slot_key") or "").strip() if current else None
+            try:
+                confidence = float(entry["confidence"]) if entry.get("confidence") is not None else None
+            except (TypeError, ValueError):
+                confidence = None
+            self._insert_memory_item(
+                conn,
+                patient_id,
+                category,
+                text,
+                item_id=new_item_id,
+                source=source,
+                version=old_version if current is not None else 1,
+                source_session_id=str(entry.get("source_session_id") or "").strip() or None,
+                source_turn_id=source_turn_id,
+                slot_key=slot_key or inherited_slot,
+                observed_at=str(entry.get("observed_at") or "").strip() or None,
+                valid_until=str(entry.get("valid_until") or "").strip() or None,
+                sensitivity=str(entry.get("sensitivity") or "normal"),
+                confidence=confidence,
+                confirmed_by="user" if updated_by == "user" else str(entry.get("confirmed_by") or "") or None,
+                evidence_json=evidence_json,
+                supersedes_item_id=supersedes_item_id,
+                metadata=metadata or None,
+            )
+        now = _now()
+        for row in rows:
+            item_id = str(row["item_id"])
+            if item_id in matched:
+                continue
+            version = int(row["version"] or 0) + 1
+            conn.execute(
+                f"""UPDATE {_MEMORY_ITEM_TABLE}
+                    SET status='deleted', version=?, deleted_at=?, updated_at=?
+                    WHERE patient_id=? AND item_id=? AND status='active'""",
+                (version, now, now, patient_id, item_id),
+            )
+            self._enqueue_mirror_op(
+                conn,
+                patient_id,
+                item_id,
+                version,
+                "delete",
+                str(row.get("source_turn_id") or "") or None,
+            )
+        if category == "events":
+            self._suppress_redundant_event_items(conn, patient_id, WELLBEING)
 
     def _set_snapshot_item_content(
         self,
@@ -1171,12 +1726,7 @@ class EmotionMemobase:
         conn: sqlite3.Connection,
         snapshot: Mapping[str, Any],
     ) -> dict[str, Any]:
-        self._sync_memory_items_from_snapshot(
-            conn,
-            str(snapshot["patient_id"]),
-            snapshot,
-        )
-        result = self._snapshot_with_deleted_filtered(conn, snapshot)
+        result = self._snapshot_from_items(conn, snapshot)
         result["recent_turns"] = self._read_turns(
             conn, result["patient_id"], _MAX_TURNS_IN_SNAPSHOT
         )
@@ -1251,7 +1801,7 @@ class EmotionMemobase:
         valence = _emotion_valence(emotion_scores)
         arousal = _emotion_arousal(emotion_scores)
         dominant = _dominant_emotion(emotion_scores)
-        status = str(analysis_status or "final").strip() or "final"
+        status = "unavailable" if not emotion_scores else str(analysis_status or "final").strip() or "final"
         source = str(emotion_source or "multimodal").strip() or "multimodal"
         with self._lock, self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -1270,10 +1820,10 @@ class EmotionMemobase:
                        audio_path=COALESCE(?, audio_path), source=?
                    WHERE id=?""",
                 (
-                    emotion_scores["joy"], emotion_scores["sadness"],
-                    emotion_scores["anger"], emotion_scores["fear"],
-                    emotion_scores["anxiety"], emotion_scores["calm"],
-                    emotion_scores["confusion"], valence, arousal, dominant,
+                    emotion_scores.get("joy", 0.0), emotion_scores.get("sadness", 0.0),
+                    emotion_scores.get("anger", 0.0), emotion_scores.get("fear", 0.0),
+                    emotion_scores.get("anxiety", 0.0), emotion_scores.get("calm", 0.0),
+                    emotion_scores.get("confusion", 0.0), valence, arousal, dominant,
                     status, audio_path, source, int(trajectory["id"]),
                 ),
             )
@@ -1399,20 +1949,32 @@ class EmotionMemobase:
                     emotion = dict(snapshot.get("emotion") or {})
                     emotion["history"] = _json_copy(value)
                     snapshot["emotion"] = emotion
-                elif key in _LIST_FIELDS:
+                elif key in {"facts", "preferences", "events", "comfort_strategies"}:
                     if not isinstance(value, list):
                         raise ValueError(f"{key} must be a list")
-                    snapshot[key] = _json_copy(value)
+                    self._replace_user_memory_category(
+                        conn,
+                        patient_id,
+                        key,
+                        list(value),
+                        updated_by=updated_by,
+                    )
+                elif key == "mmse_history":
+                    if not isinstance(value, list):
+                        raise ValueError("mmse_history must be a list")
+                    snapshot[key] = _json_copy(value)[-_MAX_MMSE_HISTORY:]
                 elif key == "narrative":
                     snapshot[key] = str(value or "")
                 else:
                     snapshot[key] = _json_copy(value)
             if profile_updates:
                 self._update_patient_profile(conn, patient_id, profile_updates)
+            snapshot = self._snapshot_from_items(conn, snapshot)
             self._save_snapshot(conn, snapshot, updated_by=updated_by)
             stored = self._load_snapshot(conn, patient_id)
-            self._sync_memory_items_from_snapshot(conn, patient_id, stored)
-            return self._public_snapshot(conn, stored)
+            result = self._public_snapshot(conn, stored)
+        self._schedule_mirror_ops(patient_id)
+        return result
 
     def update_memory(
         self,
@@ -1451,8 +2013,7 @@ class EmotionMemobase:
                     entry = {"text": str(item or "").strip()}
                 if not _memory_item_text(entry):
                     raise ValueError(f"{field} cannot contain blank items")
-                entry.setdefault("id", uuid.uuid4().hex)
-                entry["source"] = "manual"
+                entry["source"] = "user_direct"
                 entry.setdefault("status", "active")
                 entry.setdefault("evidence_turn_ids", [])
                 items.append(entry)
@@ -1509,37 +2070,52 @@ class EmotionMemobase:
         now = _now()
         with self._lock, self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            snapshot = self._load_snapshot(conn, patient_id)
-            strategies = list(snapshot.get("comfort_strategies") or [])
-            entry = None
-            for index, item in enumerate(strategies):
-                if isinstance(item, Mapping) and str(item.get("strategy") or "").strip() == strategy:
-                    item = dict(item)
-                    item.setdefault("id", uuid.uuid4().hex)
-                    item["effective"] = bool(effective)
-                    item["updated_at"] = now
-                    try:
-                        count = int(item.get("use_count") or 0)
-                    except (TypeError, ValueError):
-                        count = 0
-                    item["use_count"] = count + 1
-                    entry = item
-                    strategies[index] = item
-                    break
-            if entry is None:
-                entry = {
-                    "id": uuid.uuid4().hex,
-                    "strategy": strategy,
-                    "effective": bool(effective),
-                    "use_count": 1,
-                    "created_at": now,
-                    "updated_at": now,
-                }
-                strategies.append(entry)
-            snapshot["comfort_strategies"] = strategies
+            row = conn.execute(
+                f"""SELECT * FROM {_MEMORY_ITEM_TABLE}
+                    WHERE patient_id=? AND mode=? AND category='comfort_strategies'
+                      AND content=? AND status='active'
+                    LIMIT 1""",
+                (patient_id, normalize_session_mode(WELLBEING), strategy),
+            ).fetchone()
+            if row:
+                current = self._memory_item_row(row)
+                metadata = _json_object(current.get("metadata_json"))
+                try:
+                    use_count = int(metadata.get("use_count") or 0)
+                except (TypeError, ValueError):
+                    use_count = 0
+                metadata.update({"effective": bool(effective), "use_count": use_count + 1})
+                conn.execute(
+                    f"""UPDATE {_MEMORY_ITEM_TABLE}
+                        SET version=?, metadata_json=?, updated_at=?
+                        WHERE patient_id=? AND item_id=? AND status='active'""",
+                    (
+                        int(current["version"]) + 1,
+                        json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                        now,
+                        patient_id,
+                        current["item_id"],
+                    ),
+                )
+                item_id = str(current["item_id"])
+            else:
+                item_id = self._insert_memory_item(
+                    conn,
+                    patient_id,
+                    "comfort_strategies",
+                    strategy,
+                    source="system_inferred",
+                    updated_at=now,
+                    created_at=now,
+                    metadata={"effective": bool(effective), "use_count": 1},
+                )
+            snapshot = self._snapshot_from_items(conn, self._load_snapshot(conn, patient_id))
             self._save_snapshot(conn, snapshot, updated_by="system")
-            self._sync_memory_items_from_snapshot(conn, patient_id, snapshot)
-        return entry
+            row = conn.execute(
+                f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
+                (patient_id, item_id),
+            ).fetchone()
+            return self._snapshot_item_projection(self._memory_item_row(row))
 
     def list_memory_items(
         self,
@@ -1550,12 +2126,10 @@ class EmotionMemobase:
     ) -> list[dict[str, Any]]:
         patient_id = self._patient_id(patient_id)
         with self._lock, self._connection() as conn:
-            snapshot = self._load_snapshot(conn, patient_id)
-            self._sync_memory_items_from_snapshot(conn, patient_id, snapshot)
             query = f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=?"
             params: list[Any] = [patient_id]
             if not include_deleted:
-                query += " AND status='active'"
+                query += " AND status IN ('active', 'candidate', 'blocked')"
             if mode:
                 query += " AND mode=?"
                 params.append(normalize_session_mode(mode))
@@ -1564,6 +2138,136 @@ class EmotionMemobase:
                 self._memory_item_row(row)
                 for row in conn.execute(query, tuple(params)).fetchall()
             ]
+
+    def get_memory_item(self, patient_id: str, item_id: str) -> dict[str, Any]:
+        patient_id = self._patient_id(patient_id)
+        item_id = str(item_id or "").strip()
+        if not item_id:
+            raise ValueError("item_id is required")
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
+                (patient_id, item_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("MEMORY_ITEM_NOT_FOUND")
+            if str(row["status"] or "") == "superseded":
+                replacement = conn.execute(
+                    f"""SELECT * FROM {_MEMORY_ITEM_TABLE}
+                        WHERE patient_id=? AND supersedes_item_id=? AND status='active'
+                        ORDER BY version DESC LIMIT 1""",
+                    (patient_id, item_id),
+                ).fetchone()
+                if replacement:
+                    return self._memory_item_row(replacement)
+            return self._memory_item_row(row)
+
+    def _set_memory_item_status(
+        self,
+        patient_id: str,
+        item_id: str,
+        expected_version: int,
+        *,
+        from_status: str,
+        to_status: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        patient_id = self._patient_id(patient_id)
+        item_id = str(item_id or "").strip()
+        if not item_id:
+            raise ValueError("item_id is required")
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            snapshot = self._load_snapshot(conn, patient_id)
+            row = conn.execute(
+                f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
+                (patient_id, item_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("MEMORY_ITEM_NOT_FOUND")
+            current = self._memory_item_row(row)
+            if current["status"] != from_status:
+                raise KeyError(f"MEMORY_ITEM_NOT_{from_status.upper()}")
+            if int(current["version"]) != int(expected_version):
+                raise MemoryRevisionConflict(int(current["version"]))
+            version = int(current["version"]) + 1
+            now = _now()
+            conn.execute(
+                f"""UPDATE {_MEMORY_ITEM_TABLE}
+                    SET status=?, version=?, confirmed_by=?, updated_at=?
+                    WHERE patient_id=? AND item_id=?""",
+                (to_status, version, actor, now, patient_id, item_id),
+            )
+            if from_status == "active" and to_status != "active":
+                self._enqueue_mirror_op(
+                    conn,
+                    patient_id,
+                    item_id,
+                    version,
+                    "invalidate",
+                    str(current.get("source_turn_id") or "") or None,
+                )
+            snapshot = self._snapshot_from_items(conn, snapshot)
+            self._save_snapshot(conn, snapshot, updated_by=actor)
+            updated = conn.execute(
+                f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
+                (patient_id, item_id),
+            ).fetchone()
+            result = self._memory_item_row(updated)
+        self._schedule_mirror_ops(patient_id)
+        return result
+
+    def confirm_memory_item(
+        self,
+        patient_id: str,
+        item_id: str,
+        expected_version: int,
+        *,
+        confirmed_by: str = "user",
+    ) -> dict[str, Any]:
+        return self._set_memory_item_status(
+            patient_id,
+            item_id,
+            expected_version,
+            from_status="candidate",
+            to_status="active",
+            actor=confirmed_by,
+        )
+
+    def reject_memory_item(
+        self,
+        patient_id: str,
+        item_id: str,
+        expected_version: int,
+        *,
+        rejected_by: str = "user",
+    ) -> dict[str, Any]:
+        return self._set_memory_item_status(
+            patient_id,
+            item_id,
+            expected_version,
+            from_status="candidate",
+            to_status="blocked",
+            actor=rejected_by,
+        )
+
+    def stop_memory_item(
+        self,
+        patient_id: str,
+        item_id: str,
+        expected_version: int,
+        *,
+        stopped_by: str = "user",
+    ) -> dict[str, Any]:
+        """Keep the record for audit while excluding it from companionship."""
+        return self._set_memory_item_status(
+            patient_id,
+            item_id,
+            expected_version,
+            from_status="active",
+            to_status="blocked",
+            actor=stopped_by,
+        )
 
     def update_memory_item(
         self,
@@ -1584,7 +2288,6 @@ class EmotionMemobase:
         with self._lock, self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             snapshot = self._load_snapshot(conn, patient_id)
-            self._sync_memory_items_from_snapshot(conn, patient_id, snapshot)
             row = conn.execute(
                 f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
                 (patient_id, item_id),
@@ -1594,30 +2297,69 @@ class EmotionMemobase:
             current = self._memory_item_row(row)
             if current["status"] == "deleted":
                 raise KeyError("MEMORY_ITEM_DELETED")
+            if current["status"] == "superseded":
+                replacement = conn.execute(
+                    f"""SELECT version FROM {_MEMORY_ITEM_TABLE}
+                        WHERE patient_id=? AND supersedes_item_id=? AND status='active'
+                        ORDER BY version DESC LIMIT 1""",
+                    (patient_id, item_id),
+                ).fetchone()
+                if replacement:
+                    raise MemoryRevisionConflict(int(replacement["version"]))
+            if current["status"] != "active":
+                raise KeyError("MEMORY_ITEM_NOT_ACTIVE")
             if int(current["version"]) != int(expected_version):
                 raise MemoryRevisionConflict(int(current["version"]))
             now = _now()
-            next_version = int(current["version"]) + 1
+            old_version = int(current["version"]) + 1
             conn.execute(
                 f"""UPDATE {_MEMORY_ITEM_TABLE}
-                    SET content=?, version=?, source=?, updated_at=?
+                    SET version=?, status='superseded', updated_at=?
                     WHERE patient_id=? AND item_id=?""",
                 (
-                    content,
-                    next_version,
-                    str(updated_by or "user"),
+                    old_version,
                     now,
                     patient_id,
                     item_id,
                 ),
             )
-            updated_snapshot = self._set_snapshot_item_content(snapshot, item_id, content)
-            self._save_snapshot(conn, updated_snapshot, updated_by=updated_by)
+            new_item_id = self._insert_memory_item(
+                conn,
+                patient_id,
+                str(current["category"]),
+                content,
+                mode=str(current["mode"] or WELLBEING),
+                source="user_correction",
+                version=old_version,
+                source_session_id=current.get("source_session_id"),
+                source_turn_id=current.get("source_turn_id"),
+                slot_key=current.get("slot_key"),
+                observed_at=current.get("observed_at"),
+                valid_until=current.get("valid_until"),
+                sensitivity=current.get("sensitivity") or "normal",
+                confidence=current.get("confidence"),
+                confirmed_by="user" if updated_by == "user" else updated_by,
+                evidence_json=current.get("evidence_json"),
+                supersedes_item_id=item_id,
+                metadata=_json_object(current.get("metadata_json")) or None,
+            )
+            self._enqueue_mirror_op(
+                conn,
+                patient_id,
+                item_id,
+                old_version,
+                "invalidate",
+                str(current.get("source_turn_id") or "") or None,
+            )
+            snapshot = self._snapshot_from_items(conn, snapshot)
+            self._save_snapshot(conn, snapshot, updated_by=updated_by)
             updated = conn.execute(
                 f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
-                (patient_id, item_id),
+                (patient_id, new_item_id),
             ).fetchone()
-            return self._memory_item_row(updated)
+            result = self._memory_item_row(updated)
+        self._schedule_mirror_ops(patient_id)
+        return result
 
     def delete_memory_item(
         self,
@@ -1640,7 +2382,6 @@ class EmotionMemobase:
         with self._lock, self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             snapshot = self._load_snapshot(conn, patient_id)
-            self._sync_memory_items_from_snapshot(conn, patient_id, snapshot)
             existing_delete = conn.execute(
                 f"""SELECT deletion_token FROM {_MEMORY_DELETION_TABLE}
                     WHERE patient_id=? AND item_id=?""",
@@ -1661,6 +2402,9 @@ class EmotionMemobase:
                     existing_delete and existing_delete["deletion_token"] == token
                 )
                 result = deleted
+            elif str(current.get("status") or "").lower() != "active":
+                result = self._memory_item_row(current)
+                result["idempotent_replay"] = False
             else:
                 if int(current["version"]) != int(expected_version):
                     raise MemoryRevisionConflict(int(current["version"]))
@@ -1678,24 +2422,23 @@ class EmotionMemobase:
                         VALUES (?, ?, ?, ?, ?, ?)""",
                     (item_id, patient_id, token, deleted_by, now, next_version),
                 )
-                updated_snapshot = self._mark_snapshot_item_deleted(
-                    snapshot,
+                self._enqueue_mirror_op(
+                    conn,
+                    patient_id,
                     item_id,
-                    cleanup_content,
-                    now,
+                    next_version,
+                    "delete",
+                    cleanup_source_turn_id or None,
                 )
-                self._save_snapshot(conn, updated_snapshot, updated_by=deleted_by)
+                snapshot = self._snapshot_from_items(conn, snapshot)
+                self._save_snapshot(conn, snapshot, updated_by=deleted_by)
                 deleted = conn.execute(
                     f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
                     (patient_id, item_id),
                 ).fetchone()
                 result = self._memory_item_row(deleted)
                 result["idempotent_replay"] = False
-        result["memobase_delete_enqueued"] = self._enqueue_memobase_deletion(
-            patient_id,
-            cleanup_content,
-            cleanup_source_turn_id,
-        )
+        result["memobase_delete_enqueued"] = self._schedule_mirror_ops(patient_id)
         return result
 
     def capture_turn(
@@ -1752,7 +2495,11 @@ class EmotionMemobase:
         source = str(
             emotion_source or ("multimodal" if audio_path else "text")
         ).strip() or "text"
-        analysis_status = str(analysis_status or "final").strip() or "final"
+        analysis_status = "unavailable" if not emotion_scores else str(analysis_status or "final").strip() or "final"
+        stored_emotion_scores = {
+            name: float(emotion_scores.get(name, 0.0))
+            for name in _EMOTIONS
+        }
         emotion_entry = {
             "scores": emotion_scores,
             "dominant": dominant,
@@ -1831,7 +2578,7 @@ class EmotionMemobase:
                     "responded" if assistant_message else "pending",
                     user_message,
                     assistant_message,
-                    json.dumps(emotion_scores, ensure_ascii=False, sort_keys=True),
+                     json.dumps(stored_emotion_scores, ensure_ascii=False, sort_keys=True),
                     captured_at,
                 ),
             )
@@ -1854,13 +2601,13 @@ class EmotionMemobase:
                     analysis_status,
                     turn_index,
                     captured_at,
-                    emotion_scores["joy"],
-                    emotion_scores["sadness"],
-                    emotion_scores["anger"],
-                    emotion_scores["fear"],
-                    emotion_scores["anxiety"],
-                    emotion_scores["calm"],
-                    emotion_scores["confusion"],
+                     stored_emotion_scores["joy"],
+                     stored_emotion_scores["sadness"],
+                     stored_emotion_scores["anger"],
+                     stored_emotion_scores["fear"],
+                     stored_emotion_scores["anxiety"],
+                     stored_emotion_scores["calm"],
+                     stored_emotion_scores["confusion"],
                     valence,
                     arousal,
                     dominant,
@@ -1893,16 +2640,17 @@ class EmotionMemobase:
         current_text: str,
         *,
         topk: int = _EVENT_GIST_TOPK,
-    ) -> list[dict[str, Any]]:
+        _include_degraded: bool = False,
+    ) -> list[dict[str, Any]] | tuple[list[dict[str, Any]], bool]:
         """Return structured semantic event gists from Memobase."""
         patient_id = self._patient_id(patient_id)
         current_text = str(current_text or "").strip()
         if not current_text:
-            return []
+            return ([], False) if _include_degraded else []
         client = self._ensure_memobase()
         if client is None:
             self._log(f"[Memobase] gist_search degraded=unavailable patient={patient_id}")
-            return []
+            return ([], True) if _include_degraded else []
         params: dict[str, Any] = {
             "topk": int(topk),
             "similarity_threshold": _EVENT_GIST_SIMILARITY_THRESHOLD,
@@ -1922,7 +2670,7 @@ class EmotionMemobase:
                 f"[Memobase] gist_search degraded=error patient={patient_id} "
                 f"error={type(exc).__name__}"
             )
-            return []
+            return ([], True) if _include_degraded else []
         gists = self._normalise_event_gists(
             patient_id,
             raw_gists,
@@ -1936,6 +2684,10 @@ class EmotionMemobase:
                 for text in values
                 if text
             }
+            gists = [
+                gist for gist in gists
+                if self._gist_has_valid_local_provenance(conn, patient_id, gist)
+            ]
         if deleted_turn_ids or deleted_texts:
             gists = [
                 gist for gist in gists
@@ -1952,7 +2704,7 @@ class EmotionMemobase:
             f"event_gist_ids={gist_ids or '-'} source_turn_ids={source_turn_ids or '-'} "
             f"degraded={'none' if gists else 'empty'}"
         )
-        return gists
+        return (gists, False) if _include_degraded else gists
 
     @staticmethod
     def _search_event_gist(user: Any, query: str, params: Mapping[str, Any]) -> Any:
@@ -2006,6 +2758,7 @@ class EmotionMemobase:
             result.append(
                 {
                     "patient_id": patient_id,
+                    "remote_patient_id": str(cls._field(raw, "patient_id") or ""),
                     "project_id": str(cls._field(raw, "project_id") or ""),
                     "session_id": str(cls._field(raw, "session_id") or ""),
                     "turn_id": str(cls._field(raw, "turn_id") or ""),
@@ -2019,6 +2772,58 @@ class EmotionMemobase:
             )
         result.sort(key=lambda item: float(item.get("similarity") or 0.0), reverse=True)
         return result[:max_items]
+
+    def _gist_has_valid_local_provenance(
+        self,
+        conn: sqlite3.Connection,
+        patient_id: str,
+        gist: Mapping[str, Any],
+    ) -> bool:
+        source_turn_id = str(gist.get("source_turn_id") or "").strip()
+        if not source_turn_id:
+            return False
+        remote_patient_id = str(gist.get("remote_patient_id") or "").strip()
+        if remote_patient_id and remote_patient_id not in {
+            patient_id,
+            self._memobase_user_id(patient_id),
+        }:
+            return False
+        turn = conn.execute(
+            f"""SELECT id, turn_id, turn_state FROM {_TURN_TABLE}
+                WHERE patient_id=? AND (CAST(id AS TEXT)=? OR turn_id=?)
+                LIMIT 1""",
+            (patient_id, source_turn_id, source_turn_id),
+        ).fetchone()
+        if not turn or str(turn["turn_state"] or "").upper() in {
+            "CANCELLED", "FAILED", "RESPONSE_CANCELLED"
+        }:
+            return False
+        source_ids = {
+            source_turn_id,
+            str(turn["id"]),
+            str(turn["turn_id"] or ""),
+        }
+        if source_ids & self._deleted_turn_ids(conn, patient_id):
+            return False
+        referenced_items = []
+        for row in conn.execute(
+            f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=?",
+            (patient_id,),
+        ).fetchall():
+            item = self._memory_item_row(row)
+            evidence_ids = {str(item.get("source_turn_id") or "").strip()}
+            try:
+                evidence = json.loads(item.get("evidence_json") or "[]")
+            except json.JSONDecodeError:
+                evidence = []
+            for evidence_item in evidence if isinstance(evidence, list) else []:
+                if isinstance(evidence_item, Mapping):
+                    evidence_ids.add(str(evidence_item.get("turn_id") or "").strip())
+            if source_ids & evidence_ids:
+                referenced_items.append(item)
+        return not referenced_items or any(
+            _memory_item_is_current(item) for item in referenced_items
+        )
 
     @classmethod
     def _render_event_gists(
@@ -2051,6 +2856,32 @@ class EmotionMemobase:
             lines.append("无通过阈值的跨会话长期事件。")
         return "\n".join(lines)
 
+    def _render_local_active_fallback(self, patient_id: str) -> str:
+        with self._lock, self._connection() as conn:
+            items_by_category = self._active_items_by_category(
+                conn, patient_id, mode=WELLBEING
+            )
+        labels = {"facts": "长期事实", "preferences": "偏好", "events": "近期事件"}
+        items = [
+            item
+            for category in ("events", "facts", "preferences")
+            for item in items_by_category.get(category, [])
+        ]
+        items.sort(
+            key=lambda item: (str(item.get("updated_at") or ""), str(item.get("item_id") or "")),
+            reverse=True,
+        )
+        if not items:
+            return ""
+        lines = ["[local_active_memory]"]
+        for index, item in enumerate(items[:_LOCAL_FALLBACK_ITEM_LIMIT], 1):
+            lines.append(
+                f"{index}. 来源：SQLite active memory_items；"
+                f"{labels.get(str(item.get('category') or ''), '记忆')}："
+                f"{_clip(item.get('content'), 220)}"
+            )
+        return "\n".join(lines)
+
     def get_relevant_context(self, patient_id: str, current_text: str) -> str:
         """Compatibility wrapper for semantic event gist evidence."""
         return self.get_relevant_evidence(patient_id, current_text)
@@ -2060,13 +2891,34 @@ class EmotionMemobase:
         patient_id = self._patient_id(patient_id)
         with self._lock, self._connection() as conn:
             snapshot = self._load_snapshot(conn, patient_id)
-            self._sync_memory_items_from_snapshot(conn, patient_id, snapshot)
             items_by_category = self._active_items_by_category(
                 conn,
                 patient_id,
                 mode=WELLBEING,
             )
         lines = ["【患者权威记忆卡】"]
+        used = _token_estimate(lines[0])
+
+        def append_section(
+            title: str,
+            values: list[str],
+            *,
+            item_limit: int,
+            section_budget: int,
+        ) -> None:
+            nonlocal used
+            available = min(section_budget, _AUTHORITATIVE_CARD_TOKEN_BUDGET - used)
+            available -= _token_estimate(title)
+            if available <= 0:
+                return
+            selected = _budgeted_values(values, available, item_limit)
+            while selected and used + _token_estimate(title + "；".join(selected)) > _AUTHORITATIVE_CARD_TOKEN_BUDGET:
+                selected.pop()
+            if selected:
+                line = title + "；".join(selected)
+                lines.append(line)
+                used += _token_estimate(line)
+
         profile = snapshot.get("profile") or {}
         if profile:
             labels = {"name": "姓名", "age": "年龄", "gender": "性别", "education_years": "受教育年限"}
@@ -2078,32 +2930,39 @@ class EmotionMemobase:
                     value = json.dumps(value, ensure_ascii=False)
                 bits.append(f"{labels.get(key, key)}：{value}")
             if bits:
-                lines.append("【患者基本信息】" + "；".join(bits))
+                append_section("【患者基本信息】", bits, item_limit=160, section_budget=160)
         for title, key in (("长期事实", "facts"), ("偏好与兴趣", "preferences"), ("近期事件", "events")):
             values = [
-                (item["content"], str(item.get("source") or "").lower() == "manual")
+                (
+                    item["content"],
+                    str(item.get("source") or "").lower()
+                    in {"manual", "user", "user_direct", "user_correction", "clinician_confirmed"},
+                )
                 for item in items_by_category.get(key, [])
             ]
             if values:
-                rendered = [
-                    ("人工修订：" if manual else "") + _clip(text, 240)
-                    for text, manual in values
-                ]
-                lines.append(f"【{title}】" + "；".join(rendered))
+                append_section(
+                    f"【{title}】",
+                    [("人工修订：" if manual else "") + text for text, manual in values],
+                    item_limit=240,
+                    section_budget={"facts": 360, "preferences": 220, "events": 300}[key],
+                )
         narrative = str(snapshot.get("narrative") or "").strip()
         if narrative:
-            lines.append("【权威摘要】" + _clip(narrative, 1000))
-        strategies = [
-            (item["content"], False)
-            for item in items_by_category.get("comfort_strategies", [])
-        ]
-        if strategies:
-            lines.append(
-                "【有效安抚策略】" + "；".join(
-                    _clip(text, 180) for text, _manual in strategies
-                )
-            )
-        return "" if len(lines) == 1 else _clip("\n".join(lines), _MAX_CONTEXT_CHARS)
+            append_section("【权威摘要】", [narrative], item_limit=1000, section_budget=180)
+        effective_strategies = []
+        avoid_strategies = []
+        for item in items_by_category.get("comfort_strategies", []):
+            effective = _json_object(item.get("metadata_json")).get("effective")
+            if effective is True:
+                effective_strategies.append(item["content"])
+            elif effective is False:
+                avoid_strategies.append(item["content"])
+        if effective_strategies:
+            append_section("【有效安抚策略】", effective_strategies, item_limit=180, section_budget=180)
+        if avoid_strategies:
+            append_section("【应避免方式】", avoid_strategies, item_limit=180, section_budget=180)
+        return "" if len(lines) == 1 else "\n".join(lines)
 
     def get_cross_session_context(
         self,
@@ -2115,7 +2974,6 @@ class EmotionMemobase:
         excluded_session = str(exclude_session_id or "").strip()
         with self._lock, self._connection() as conn:
             snapshot = self._load_snapshot(conn, patient_id)
-            self._sync_memory_items_from_snapshot(conn, patient_id, snapshot)
             suppressed = _superseded_turn_ids(snapshot) | self._deleted_turn_ids(conn, patient_id)
             deleted_texts = {
                 text
@@ -2169,8 +3027,17 @@ class EmotionMemobase:
         text = str(final_text or "").strip()
         if not text:
             return ""
-        gists = self.get_relevant_event_gists(patient_id, text, topk=_EVENT_GIST_TOPK)
-        return self._render_event_gists(gists) if gists else ""
+        gists, degraded = self.get_relevant_event_gists(
+            patient_id,
+            text,
+            topk=_EVENT_GIST_TOPK,
+            _include_degraded=True,
+        )
+        if gists:
+            return self._render_event_gists(gists)
+        if degraded and _local_fallback_enabled():
+            return self._render_local_active_fallback(patient_id)
+        return ""
 
     def is_memobase_available(self) -> bool:
         return self._ensure_memobase() is not None
@@ -2229,8 +3096,6 @@ class EmotionMemobase:
         patient_id = self._patient_id(patient_id)
         with self._lock, self._connection() as conn:
             snapshot = self._load_snapshot(conn, patient_id)
-            self._sync_memory_items_from_snapshot(conn, patient_id, snapshot)
-            snapshot = self._snapshot_with_deleted_filtered(conn, snapshot)
             items_by_category = self._active_items_by_category(
                 conn,
                 patient_id,
@@ -2268,7 +3133,7 @@ class EmotionMemobase:
                 lines.append(f"【{title}】" + "；".join(_clip(value, 240) for value in values))
         if narrative:
             lines.append("【既有记忆叙事】" + _clip(narrative, 1000))
-        if emotion:
+        if emotion and str(emotion.get("analysis_status") or "final") == "final" and str(emotion.get("dominant") or "unknown") not in {"unknown", "unavailable"}:
             scores = emotion.get("scores") if isinstance(emotion, Mapping) else {}
             scores = scores if isinstance(scores, Mapping) else {}
             top = sorted(
@@ -2277,16 +3142,20 @@ class EmotionMemobase:
                 reverse=True,
             )[:2]
             score_text = "，".join(f"{name}={score:.2f}" for name, score in top if score > 0)
-            emotion_line = f"【近期情绪】{emotion.get('dominant') or 'calm'}"
+            emotion_line = f"【近期情绪】{emotion.get('dominant')}"
             if score_text:
                 emotion_line += f"（{score_text}）"
-            trend = [
+            emotion_history = (snapshot.get("emotion") or {}).get("history") or []
+            trajectory = [
                 item.get("dominant")
-                for item in ((snapshot.get("emotion") or {}).get("history") or [])[-5:]
+                for item in emotion_history[-5:]
                 if isinstance(item, Mapping) and item.get("dominant")
             ]
-            if len(trend) > 1:
-                emotion_line += f"；轨迹：{' → '.join(trend)}"
+            if len(trajectory) > 1:
+                emotion_line += f"；轨迹：{' → '.join(trajectory)}"
+            trend = _emotion_trend(emotion_history)
+            if trend:
+                emotion_line += f"；趋势：{trend}"
             lines.append(emotion_line)
         strategies = [item["content"] for item in items_by_category.get("comfort_strategies", [])]
         if strategies:
@@ -2314,6 +3183,105 @@ class EmotionMemobase:
         if not patient_id:
             raise ValueError("patient_id is required")
         return patient_id
+
+    def _enqueue_mirror_op(
+        self,
+        conn: sqlite3.Connection,
+        patient_id: str,
+        item_id: str,
+        item_version: int,
+        op_type: str,
+        source_turn_id: Optional[str],
+    ) -> None:
+        now = _now()
+        op_id = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"lmca-mirror:{patient_id}:{item_id}:{int(item_version)}:{op_type}",
+        ).hex
+        conn.execute(
+            f"""INSERT OR IGNORE INTO {_MIRROR_OP_TABLE} (
+                    op_id, patient_id, item_id, item_version, op_type,
+                    source_turn_id, status, attempt_count, next_retry_at,
+                    last_error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, ?, ?)""",
+            (
+                op_id,
+                patient_id,
+                item_id,
+                int(item_version),
+                op_type,
+                source_turn_id,
+                now,
+                now,
+            ),
+        )
+
+    def _schedule_mirror_ops(self, patient_id: str) -> bool:
+        if self._memobase is None and not self._memobase_auto:
+            return False
+        return self._submit_memobase(self._process_mirror_ops_impl, patient_id) is not None
+
+    def _process_mirror_ops_impl(self, patient_id: str) -> bool:
+        now = datetime.now().isoformat()
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                f"""SELECT * FROM {_MIRROR_OP_TABLE}
+                    WHERE patient_id=? AND status='pending'
+                      AND (next_retry_at IS NULL OR next_retry_at<=?)
+                    ORDER BY created_at ASC LIMIT 20""",
+                (patient_id, now),
+            ).fetchall()
+        if not rows:
+            return True
+        client = self._ensure_memobase()
+        if client is None:
+            return False
+        all_succeeded = True
+        for op in rows:
+            try:
+                with self._lock, self._connection() as conn:
+                    item = conn.execute(
+                        f"SELECT content FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
+                        (patient_id, op["item_id"]),
+                    ).fetchone()
+                content = str(item["content"] or "") if item else ""
+                ok = self._delete_memobase_memory_item_impl(
+                    patient_id,
+                    content,
+                    str(op["source_turn_id"] or ""),
+                )
+                if not ok:
+                    raise RuntimeError("remote invalidation did not complete")
+                with self._lock, self._connection() as conn:
+                    conn.execute(
+                        f"""UPDATE {_MIRROR_OP_TABLE}
+                            SET status='succeeded', updated_at=?, last_error=NULL
+                            WHERE op_id=? AND status='pending'""",
+                        (_now(), op["op_id"]),
+                    )
+            except Exception as exc:
+                all_succeeded = False
+                attempts = int(op["attempt_count"] or 0) + 1
+                failed = attempts >= 3
+                retry_at = None if failed else (
+                    datetime.now() + timedelta(seconds=min(300, 10 * (2 ** (attempts - 1)))).isoformat()
+                )
+                with self._lock, self._connection() as conn:
+                    conn.execute(
+                        f"""UPDATE {_MIRROR_OP_TABLE}
+                            SET status=?, attempt_count=?, next_retry_at=?,
+                                last_error=?, updated_at=?
+                            WHERE op_id=? AND status='pending'""",
+                        (
+                            "failed" if failed else "pending",
+                            attempts,
+                            retry_at,
+                            f"{type(exc).__name__}: {exc}"[:500],
+                            _now(),
+                            op["op_id"],
+                        ),
+                    )
+        return all_succeeded
 
     def _enqueue_memobase(
         self,
@@ -2619,15 +3587,14 @@ class EmotionMemobase:
         self,
         conn: sqlite3.Connection,
         patient_id: str,
-        start_turn_id: int,
         cutoff_turn_id: int,
         session_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         query = f"""SELECT id, session_id, turn_id, user_message, assistant_message,
                            emotion_json, created_at, turn_state, response_status
                     FROM {_TURN_TABLE}
-                    WHERE patient_id=? AND id>? AND id<=?"""
-        params: list[Any] = [patient_id, int(start_turn_id), int(cutoff_turn_id)]
+                    WHERE patient_id=? AND id<=? AND consolidation_status='pending'"""
+        params: list[Any] = [patient_id, int(cutoff_turn_id)]
         if session_id:
             query += " AND session_id=?"
             params.append(session_id)
@@ -2635,7 +3602,9 @@ class EmotionMemobase:
         rows = conn.execute(query, tuple(params)).fetchall()
         result = []
         for row in rows:
-            if str(row["turn_state"] or "").upper() in {"CANCELLED", "FAILED"}:
+            if str(row["turn_state"] or "").upper() in {
+                "CANCELLED", "FAILED", "RESPONSE_CANCELLED"
+            }:
                 continue
             try:
                 emotion = json.loads(row["emotion_json"] or "{}")
@@ -2655,6 +3624,28 @@ class EmotionMemobase:
                 }
             )
         return result
+
+    @staticmethod
+    def _consolidation_waterline(
+        conn: sqlite3.Connection,
+        patient_id: str,
+        cutoff_turn_id: int,
+    ) -> int:
+        """Return the highest turn in the consecutively completed prefix."""
+        rows = conn.execute(
+            f"""SELECT id, consolidation_status FROM {_TURN_TABLE}
+                WHERE patient_id=? AND id<=?
+                ORDER BY id ASC""",
+            (patient_id, int(cutoff_turn_id)),
+        ).fetchall()
+        waterline = 0
+        for row in rows:
+            if str(row["consolidation_status"] or "").lower() not in {
+                "consolidated", "skipped"
+            }:
+                break
+            waterline = int(row["id"])
+        return waterline
 
     @staticmethod
     def _default_consolidation_patch(turns: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -2705,7 +3696,9 @@ class EmotionMemobase:
 
     @staticmethod
     def _merge_consolidation_patch(
-        snapshot: Mapping[str, Any], patch: Mapping[str, Any]
+        snapshot: Mapping[str, Any],
+        patch: Mapping[str, Any],
+        suppressed_turn_ids: Optional[set[str]] = None,
     ) -> dict[str, Any]:
         merged = _normalise_snapshot(str(snapshot["patient_id"]), snapshot)
         for field in ("facts", "preferences", "events"):
@@ -2713,6 +3706,7 @@ class EmotionMemobase:
             if field == "events":
                 current = _compact_event_entries(current)
             superseded = _superseded_turn_ids({field: current})
+            superseded.update(suppressed_turn_ids or set())
             for item in patch.get(field) or []:
                 if isinstance(item, Mapping):
                     entry = dict(item)
@@ -2775,6 +3769,162 @@ class EmotionMemobase:
             merged["narrative"] = str(patch["narrative"])
         return merged
 
+    def _apply_consolidation_items(
+        self,
+        conn: sqlite3.Connection,
+        patient_id: str,
+        merged: Mapping[str, Any],
+    ) -> None:
+        """Persist a derived projection without treating snapshot JSON as authority."""
+        rows = [
+            self._memory_item_row(row)
+            for row in conn.execute(
+                f"""SELECT * FROM {_MEMORY_ITEM_TABLE}
+                    WHERE patient_id=? AND mode=? AND status='active'""",
+                (patient_id, normalize_session_mode(WELLBEING)),
+            ).fetchall()
+        ]
+        by_id = {str(row["item_id"]): row for row in rows}
+        by_content = {
+            (str(row["category"]), str(row["content"])): row
+            for row in rows
+        }
+        target_ids: set[str] = set()
+
+        for category in ("facts", "preferences", "events", "comfort_strategies"):
+            for raw in merged.get(category) or []:
+                entry = dict(raw) if isinstance(raw, Mapping) else {"text": raw}
+                text = _memory_item_text(entry)
+                if not text:
+                    continue
+                requested_id = str(
+                    entry.get("item_id") or entry.get("id") or ""
+                ).strip() or None
+                current = by_id.get(requested_id) if requested_id else None
+                if current is None:
+                    current = by_content.get((category, text))
+                if current is not None and str(current["content"]) != text:
+                    requested_id = None
+                    current = None
+                if current is not None:
+                    current_id = str(current["item_id"])
+                    target_ids.add(current_id)
+                    evidence_json = self._item_evidence_json(entry)
+                    metadata = _json_object(
+                        entry.get("metadata_json") or entry.get("metadata")
+                    )
+                    if category == "comfort_strategies" and "effective" in entry:
+                        metadata["effective"] = entry["effective"]
+                    metadata_json = (
+                        json.dumps(metadata, ensure_ascii=False, sort_keys=True)
+                        if metadata
+                        else None
+                    )
+                    updates: list[str] = []
+                    values: list[Any] = []
+                    if evidence_json is not None and evidence_json != current.get("evidence_json"):
+                        updates.append("evidence_json=?")
+                        values.append(evidence_json)
+                    if metadata_json is not None and metadata_json != current.get("metadata_json"):
+                        updates.append("metadata_json=?")
+                        values.append(metadata_json)
+                    if updates:
+                        now = _now()
+                        values.extend((int(current["version"]) + 1, now, patient_id, current_id))
+                        conn.execute(
+                            f"""UPDATE {_MEMORY_ITEM_TABLE}
+                                SET {', '.join(updates)}, version=?, updated_at=?
+                                WHERE patient_id=? AND item_id=? AND status='active'""",
+                            tuple(values),
+                        )
+                    continue
+
+                if requested_id:
+                    existing = conn.execute(
+                        f"SELECT status FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
+                        (patient_id, requested_id),
+                    ).fetchone()
+                    if existing:
+                        # A deleted/superseded id is a tombstone, never a reusable primary key.
+                        continue
+                item_id = requested_id or uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    f"lmca-derived:{patient_id}:{category}:{text}",
+                ).hex
+                if item_id in by_id:
+                    continue
+                source = str(entry.get("source") or "system_inferred").strip() or "system_inferred"
+                if source == "derived":
+                    source = "system_inferred"
+                evidence_json = self._item_evidence_json(entry)
+                source_turn_id = str(entry.get("source_turn_id") or "").strip() or None
+                if not source_turn_id:
+                    try:
+                        evidence = json.loads(evidence_json or "[]")
+                    except json.JSONDecodeError:
+                        evidence = []
+                    if evidence and isinstance(evidence[0], Mapping):
+                        source_turn_id = str(evidence[0].get("turn_id") or "").strip() or None
+                metadata = _json_object(
+                    entry.get("metadata_json") or entry.get("metadata")
+                )
+                if category == "comfort_strategies" and "effective" in entry:
+                    metadata["effective"] = entry["effective"]
+                try:
+                    confidence = (
+                        float(entry["confidence"])
+                        if entry.get("confidence") is not None
+                        else None
+                    )
+                except (TypeError, ValueError):
+                    confidence = None
+                self._insert_memory_item(
+                    conn,
+                    patient_id,
+                    category,
+                    text,
+                    item_id=item_id,
+                    mode=WELLBEING,
+                    source=source,
+                    source_session_id=str(entry.get("source_session_id") or "").strip() or None,
+                    source_turn_id=source_turn_id,
+                    slot_key=str(entry.get("slot_key") or "").strip() or None,
+                    observed_at=str(entry.get("observed_at") or "").strip() or None,
+                    valid_until=str(entry.get("valid_until") or "").strip() or None,
+                    sensitivity=str(entry.get("sensitivity") or "normal"),
+                    confidence=confidence,
+                    confirmed_by=str(entry.get("confirmed_by") or "").strip() or None,
+                    evidence_json=evidence_json,
+                    supersedes_item_id=str(entry.get("supersedes_item_id") or "").strip() or None,
+                    metadata=metadata or None,
+                )
+                target_ids.add(item_id)
+
+        # Event compaction can replace a derived event with a longer equivalent.
+        # Keep the old evidence for audit, but make it unavailable for prompts.
+        for row in rows:
+            item_id = str(row["item_id"])
+            if item_id in target_ids or str(row["category"]) != "events":
+                continue
+            if _event_is_user_managed(row):
+                continue
+            version = int(row["version"]) + 1
+            now = _now()
+            conn.execute(
+                f"""UPDATE {_MEMORY_ITEM_TABLE}
+                    SET status='superseded', version=?, updated_at=?
+                    WHERE patient_id=? AND item_id=? AND status='active'""",
+                (version, now, patient_id, item_id),
+            )
+            self._enqueue_mirror_op(
+                conn,
+                patient_id,
+                item_id,
+                version,
+                "invalidate",
+                str(row.get("source_turn_id") or "") or None,
+            )
+
     def consolidate_pending_turns(
         self,
         patient_id: str,
@@ -2784,11 +3934,10 @@ class EmotionMemobase:
         patch_builder: Optional[Callable[..., Mapping[str, Any]]] = None,
         session_id: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Apply one CAS-protected incremental patch to turns after the snapshot waterline."""
+        """Consolidate each pending turn exactly once, independent of session order."""
         patient_id = self._patient_id(patient_id)
         session_id = str(session_id).strip() or None if session_id else None
         with self._lock, self._connection() as conn:
-            snapshot = self._load_snapshot(conn, patient_id)
             upper = cutoff_turn_id
             if upper is None:
                 query = f"SELECT MAX(id) FROM {_TURN_TABLE} WHERE patient_id=?"
@@ -2799,52 +3948,29 @@ class EmotionMemobase:
                 row = conn.execute(query, tuple(params)).fetchone()
                 upper = int(row[0] or 0)
             upper = int(upper)
-            start = int(snapshot.get("last_consolidated_turn_id") or 0)
-            turns = self._pending_consolidation_turns(conn, patient_id, start, upper, session_id)
-            base_revision = int(snapshot.get("revision") or 0)
+            conn.execute(
+                f"""UPDATE {_TURN_TABLE}
+                    SET consolidation_status='skipped', consolidated_at=?
+                    WHERE patient_id=? AND id<=? AND consolidation_status='pending'
+                      AND UPPER(COALESCE(turn_state, '')) IN
+                          ('CANCELLED', 'FAILED', 'RESPONSE_CANCELLED')""",
+                (_now(), patient_id, upper),
+            )
+            snapshot = self._snapshot_from_items(
+                conn, self._load_snapshot(conn, patient_id)
+            )
+            turns = self._pending_consolidation_turns(conn, patient_id, upper, session_id)
+
         if not turns:
-            if upper <= start:
-                return {
-                    "applied": True,
-                    "patient_id": patient_id,
-                    "revision": base_revision,
-                    "last_consolidated_turn_id": start,
-                    "turn_count": 0,
-                    "patch": {},
-                }
-            validated = {}
-            merged = dict(snapshot)
-            merged["last_consolidated_turn_id"] = upper
             with self._lock, self._connection() as conn:
-                conn.execute("BEGIN IMMEDIATE")
                 current = self._load_snapshot(conn, patient_id)
-                current_revision = int(current.get("revision") or 0)
-                current_waterline = int(current.get("last_consolidated_turn_id") or 0)
-                if current_revision != base_revision or current_waterline != start:
-                    raise MemoryRevisionConflict(current_revision)
-                updated_at = _now()
-                stored = _normalise_snapshot(patient_id, merged)
-                stored["revision"] = base_revision + 1
-                stored["last_consolidated_turn_id"] = upper
-                stored["updated_at"] = updated_at
-                stored["updated_by"] = "system"
-                payload = json.dumps(stored, ensure_ascii=False, sort_keys=True)
-                cursor = conn.execute(
-                    f"""UPDATE {_SNAPSHOT_TABLE}
-                        SET snapshot_json=?, revision=?, last_consolidated_turn_id=?,
-                            updated_at=?, updated_by=?
-                        WHERE patient_id=? AND revision=? AND last_consolidated_turn_id=?""",
-                    (payload, stored["revision"], upper, updated_at, "system",
-                     patient_id, base_revision, start),
-                )
-                if cursor.rowcount != 1:
-                    raise MemoryRevisionConflict(current_revision)
-                self._sync_memory_items_from_snapshot(conn, patient_id, stored)
+                waterline = self._consolidation_waterline(conn, patient_id, upper)
+                revision = int(current.get("revision") or 0)
             return {
                 "applied": True,
                 "patient_id": patient_id,
-                "revision": base_revision + 1,
-                "last_consolidated_turn_id": upper,
+                "revision": revision,
+                "last_consolidated_turn_id": waterline,
                 "turn_count": 0,
                 "patch": {},
             }
@@ -2856,46 +3982,626 @@ class EmotionMemobase:
         else:
             generated = patch if patch is not None else self._default_consolidation_patch(turns)
         validated = self._validate_consolidation_patch(generated)
-        merged = self._merge_consolidation_patch(snapshot, validated)
-        merged["last_consolidated_turn_id"] = upper
-        merged["revision"] = base_revision
         with self._lock, self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             current = self._load_snapshot(conn, patient_id)
-            current_revision = int(current.get("revision") or 0)
-            current_waterline = int(current.get("last_consolidated_turn_id") or 0)
-            if current_revision != base_revision or current_waterline != start:
-                raise MemoryRevisionConflict(current_revision)
-            updated_at = _now()
-            stored = _normalise_snapshot(patient_id, merged)
-            stored["revision"] = base_revision + 1
-            stored["last_consolidated_turn_id"] = upper
-            stored["updated_at"] = updated_at
-            stored["updated_by"] = "system"
-            stored.pop("mmse_scores", None)
-            stored.pop("emotion_history", None)
-            stored.pop("recent_turns", None)
-            payload = json.dumps(stored, ensure_ascii=False, sort_keys=True)
-            cursor = conn.execute(
-                f"""UPDATE {_SNAPSHOT_TABLE}
-                    SET snapshot_json=?, revision=?, last_consolidated_turn_id=?,
-                        updated_at=?, updated_by=?
-                    WHERE patient_id=? AND revision=? AND last_consolidated_turn_id=?""",
-                (
-                    payload, stored["revision"], upper, updated_at, "system",
-                    patient_id, base_revision, start,
-                ),
+            current_items_snapshot = self._snapshot_from_items(conn, current)
+            selected_ids = [int(turn["local_turn_id"]) for turn in turns]
+            placeholders = ", ".join("?" for _ in selected_ids)
+            ready_rows = conn.execute(
+                f"""SELECT id FROM {_TURN_TABLE}
+                    WHERE patient_id=? AND consolidation_status='pending'
+                      AND id IN ({placeholders})
+                      AND UPPER(COALESCE(turn_state, '')) NOT IN
+                          ('CANCELLED', 'FAILED', 'RESPONSE_CANCELLED')""",
+                (patient_id, *selected_ids),
+            ).fetchall()
+            if not ready_rows:
+                waterline = self._consolidation_waterline(conn, patient_id, upper)
+                return {
+                    "applied": True,
+                    "patient_id": patient_id,
+                    "revision": int(current.get("revision") or 0),
+                    "last_consolidated_turn_id": waterline,
+                    "turn_count": 0,
+                    "patch": {},
+                }
+            ready_ids = [int(row[0]) for row in ready_rows]
+            ready_placeholders = ", ".join("?" for _ in ready_ids)
+            suppressed = _superseded_turn_ids(current_items_snapshot)
+            suppressed.update(self._deleted_turn_ids(conn, patient_id))
+            merged = self._merge_consolidation_patch(
+                current_items_snapshot,
+                validated,
+                suppressed,
             )
-            if cursor.rowcount != 1:
-                raise MemoryRevisionConflict(current_revision)
-            self._sync_memory_items_from_snapshot(conn, patient_id, stored)
+            now = _now()
+            conn.execute(
+                f"""UPDATE {_TURN_TABLE}
+                    SET consolidation_status='consolidated', consolidated_at=?
+                    WHERE patient_id=? AND id IN ({ready_placeholders})
+                      AND consolidation_status='pending'""",
+                (now, patient_id, *ready_ids),
+            )
+            waterline = self._consolidation_waterline(conn, patient_id, upper)
+            merged["last_consolidated_turn_id"] = waterline
+            self._apply_consolidation_items(conn, patient_id, merged)
+            stored = self._snapshot_from_items(conn, current)
+            stored["narrative"] = str(merged.get("narrative") or "")
+            stored["last_consolidated_turn_id"] = waterline
+            self._save_snapshot(conn, stored, updated_by="system")
         return {
             "applied": True,
             "patient_id": patient_id,
-            "revision": base_revision + 1,
-            "last_consolidated_turn_id": upper,
-            "turn_count": len(turns),
+            "revision": int(current.get("revision") or 0) + 1,
+            "last_consolidated_turn_id": waterline,
+            "turn_count": len(ready_rows),
             "patch": validated,
+        }
+
+    def _session_turns_for_reflection(
+        self,
+        conn: sqlite3.Connection,
+        patient_id: str,
+        session_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            f"""SELECT id, turn_id, user_message, assistant_message, created_at
+                FROM {_TURN_TABLE}
+                WHERE patient_id=? AND session_id=?
+                  AND UPPER(COALESCE(turn_state, '')) NOT IN
+                      ('CANCELLED', 'FAILED', 'RESPONSE_CANCELLED')
+                ORDER BY id ASC""",
+            (patient_id, session_id),
+        ).fetchall()
+        return [dict(row) for row in rows if str(row["user_message"] or "").strip()]
+
+    @staticmethod
+    def _reflection_prompt(turns: list[Mapping[str, Any]]) -> str:
+        transcript = []
+        for turn in turns:
+            turn_id = str(turn["turn_id"])
+            transcript.append(
+                f"[user turn_id={turn_id} observed_at={turn.get('created_at', '')}] "
+                f"{turn['user_message']}"
+            )
+            assistant = str(turn.get("assistant_message") or "").strip()
+            if assistant:
+                transcript.append(f"[assistant context] {assistant}")
+        schema = {
+            "session_summary": {"content": "string", "evidence_turn_ids": ["turn_id"]},
+            "memory_candidates": [{
+                "category": "facts|preferences|events|emotional_triggers|boundaries|comfort_strategies",
+                "content": "string",
+                "source_turn_id": "turn_id",
+                "evidence_turn_ids": ["turn_id"],
+                "evidence_quote": "verbatim user quote",
+                "observed_at": "ISO-8601 date/time",
+                "valid_until": "ISO-8601 date/time or null",
+                "sensitivity": "normal|sensitive|high",
+                "confidence": 0.0,
+                "slot_key": "optional string",
+                "suggested_operation": "ADD|SUPERSEDE|CANDIDATE|NOOP|BLOCK",
+            }],
+        }
+        return (
+            "你在进行会话结束后的影子记忆抽取。只返回一个 JSON 对象，不要 Markdown。"
+            "只可根据标记为 user 的原话给出证据；assistant context 仅用于理解指代，绝不能作为事实或 quote。"
+            "按以下顺序逐条扫描每个 user turn，再检查跨轮关系：1) 先处理明确纠正；2) 再合并多轮事实；3) 最后处理单轮事实。每个明确纠正至少输出一条 candidate。"
+            "明确纠正必须提取为一条 candidate：识别“不是A，是B”“改成B”“我记错了”“搬到B”等表达时，记录被纠正后的B，suggested_operation 使用 SUPERSEDE，并保留纠正所在 user turn；不能因为纠正只有一轮、内容简单或已有旧记忆而漏掉。"
+            "多轮 user 原话合起来形成长期陪伴价值时，必须形成一条综合 candidate，并在 evidence_turn_ids 中列出所有支持该事实的 user turn；不要把一个跨轮事实拆成互不相干的单轮记忆。例如“晚上一个人时难受”+“那样时常常睡不着”必须合并为一条同时包含独处、难受和失眠的 candidate，evidence_turn_ids 必须包含这两轮；“女儿周末来看我”+“陪我下棋，我很开心”必须合并为一条同时包含女儿、下棋和开心的 candidate，不能只记其中一轮，也不能输出两条单轮 candidate；“我不想被催着回答”+“慢一点我才能想起来”也必须合并为一条慢节奏边界 candidate。"
+            "负向偏好和长期边界可以保存，但 content 必须保留否定方向；对症状、争执、危机或自伤意图的否认通常不保存，绝不能反写为存在；带“现在、今天、这次、暂时”等短期范围的拒绝必须保留范围或 valid_until，不得升级为永久边界。"
+            "只要 user 原话含“可能、也许、好像、不太确定、记得但不确定”等不确定标记，candidate content 必须原样保留不确定性，禁止写成“用户计划”“用户希望”“已经”“一定”等确定表述；只要含明确的过去、当前或未来时间范围（包括“这两天”“过几天”“明天”“下周”“下月”“之后”等），也必须保留原话中的时间词或填写 valid_until。observed_at 必须填写对应 user turn 的 observed_at 值，不能把 schema 中的示例文字（如 ISO-8601 date/time）原样返回。"
+            "assistant context 不能增加、确认或推断患者事实；例如 assistant 提出的诊断、恐惧、关系判断或限制，若 user 没有明确说过，必须拒绝该记忆。单次吃饭、短暂在家、喝水、刚醒等一次性日常事实没有长期陪伴价值，除非 user 明确说明其长期意义，否则使用空数组。对明确的暂时安全边界，必须生成带原话时间范围的 candidate，不能因为只有一轮而漏记。冲突、试探、过去时和不确定信息可以作为低置信 candidate，但 content 必须明确原话的时间和不确定性；没有可靠长期陪伴价值时使用空数组。所有 candidate 仍只进入 shadow，不会自动 active。\n"
+            f"JSON schema:\n{json.dumps(schema, ensure_ascii=False)}\n\n会话记录：\n"
+            + "\n".join(transcript)
+        )
+
+    def _invoke_session_reflector(self, prompt: str) -> Any:
+        if self._session_reflector is not None:
+            return self._session_reflector(prompt)
+        from src.llm.http_client_pool import get_chat_openai
+
+        llm = get_chat_openai(
+            model=os.getenv("MEMORY_REFLECTION_MODEL") or None,
+            temperature=0,
+            max_tokens=1600,
+            timeout=30,
+            max_retries=1,
+            streaming=False,
+            disable_thinking=True,
+        )
+        response = llm.invoke([{"role": "user", "content": prompt}])
+        return getattr(response, "content", response)
+
+    @staticmethod
+    def _reflection_payload(value: Any) -> dict[str, Any]:
+        if isinstance(value, Mapping):
+            return dict(value)
+        raw = str(getattr(value, "content", value) or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1]
+            raw = raw.rsplit("```", 1)[0].strip()
+        parsed = json.loads(raw)
+        if not isinstance(parsed, Mapping):
+            raise ValueError("reflection response must be a JSON object")
+        return dict(parsed)
+
+    def _claim_session_reflection(
+        self,
+        patient_id: str,
+        session_id: str,
+        *,
+        force: bool,
+    ) -> dict[str, Any]:
+        now = datetime.now()
+        now_text = now.isoformat()
+        key = uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"lmca-session-reflection:{patient_id}:{session_id}",
+        ).hex
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                f"SELECT * FROM {_SESSION_REFLECTION_TABLE} WHERE patient_id=? AND session_id=?",
+                (patient_id, session_id),
+            ).fetchone()
+            if row and row["status"] == "succeeded":
+                return {"claimed": False, "row": dict(row), "idempotent_replay": True}
+            if row and row["status"] == "running" and str(row["lease_until"] or "") > now_text:
+                return {"claimed": False, "row": dict(row), "deferred": True}
+            if (
+                row
+                and row["status"] == "failed"
+                and not force
+                and str(row["next_retry_at"] or "") > now_text
+            ):
+                return {"claimed": False, "row": dict(row), "deferred": True}
+            attempts = int(row["attempt_count"] or 0) + 1 if row else 1
+            lease_until = (now + timedelta(seconds=_REFLECTION_LEASE_SECONDS)).isoformat()
+            lease_token = uuid.uuid4().hex
+            if row:
+                conn.execute(
+                    f"""UPDATE {_SESSION_REFLECTION_TABLE}
+                        SET status='running', attempt_count=?, next_retry_at=NULL,
+                            last_error=NULL, lease_until=?, lease_token=?, updated_at=?
+                        WHERE patient_id=? AND session_id=?""",
+                    (attempts, lease_until, lease_token, now_text, patient_id, session_id),
+                )
+            else:
+                conn.execute(
+                    f"""INSERT INTO {_SESSION_REFLECTION_TABLE}
+                        (patient_id, session_id, idempotency_key, status, attempt_count,
+                         lease_until, lease_token, created_at, updated_at)
+                        VALUES (?, ?, ?, 'running', 1, ?, ?, ?, ?)""",
+                    (patient_id, session_id, key, lease_until, lease_token, now_text, now_text),
+                )
+            return {
+                "claimed": True,
+                "idempotency_key": key,
+                "lease_token": lease_token,
+                "attempt_count": attempts,
+            }
+
+    def _reflection_claim_is_current(
+        self,
+        conn: sqlite3.Connection,
+        patient_id: str,
+        session_id: str,
+        lease_token: str,
+    ) -> bool:
+        row = conn.execute(
+            f"""SELECT 1 FROM {_SESSION_REFLECTION_TABLE}
+                WHERE patient_id=? AND session_id=? AND status='running'
+                  AND lease_token=? AND lease_until>?""",
+            (patient_id, session_id, lease_token, datetime.now().isoformat()),
+        ).fetchone()
+        return row is not None
+
+    def _fail_session_reflection(
+        self,
+        patient_id: str,
+        session_id: str,
+        exc: Exception,
+        lease_token: str,
+    ) -> dict[str, Any]:
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                f"""SELECT attempt_count FROM {_SESSION_REFLECTION_TABLE}
+                    WHERE patient_id=? AND session_id=? AND status='running'
+                      AND lease_token=? AND lease_until>?""",
+                (patient_id, session_id, lease_token, datetime.now().isoformat()),
+            ).fetchone()
+            if not row:
+                return {
+                    "status": "stale",
+                    "patient_id": patient_id,
+                    "session_id": session_id,
+                }
+            attempts = int(row["attempt_count"] or 1) if row else 1
+            retry_at = datetime.now() + timedelta(
+                seconds=min(300, _REFLECTION_RETRY_SECONDS * (2 ** min(attempts - 1, 2)))
+            )
+            conn.execute(
+                f"""UPDATE {_SESSION_REFLECTION_TABLE}
+                    SET status='failed', next_retry_at=?, last_error=?, lease_until=NULL,
+                        lease_token=NULL, updated_at=?
+                    WHERE patient_id=? AND session_id=? AND status='running'
+                      AND lease_token=?""",
+                (
+                    retry_at.isoformat(),
+                    f"{type(exc).__name__}: {exc}"[:500],
+                    _now(),
+                    patient_id,
+                    session_id,
+                    lease_token,
+                ),
+            )
+        return {"status": "failed", "patient_id": patient_id, "session_id": session_id}
+
+    def get_session_reflection(self, patient_id: str, session_id: str) -> dict[str, Any]:
+        patient_id = self._patient_id(patient_id)
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            raise ValueError("session_id is required")
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                f"SELECT * FROM {_SESSION_REFLECTION_TABLE} WHERE patient_id=? AND session_id=?",
+                (patient_id, session_id),
+            ).fetchone()
+        if not row:
+            return {"status": "missing", "patient_id": patient_id, "session_id": session_id}
+        result = dict(row)
+        result["session_summary"] = result.pop("session_summary") or ""
+        return result
+
+    def get_latest_session_reflection(
+        self,
+        patient_id: str,
+        *,
+        exclude_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        patient_id = self._patient_id(patient_id)
+        excluded = str(exclude_session_id or "").strip()
+        with self._lock, self._connection() as conn:
+            row = conn.execute(
+                f"""SELECT * FROM {_SESSION_REFLECTION_TABLE}
+                    WHERE patient_id=? AND status='succeeded'
+                      AND COALESCE(session_summary, '')<>''
+                      AND (?='' OR session_id<>?)
+                    ORDER BY COALESCE(completed_at, updated_at, created_at) DESC
+                    LIMIT 1""",
+                (patient_id, excluded, excluded),
+            ).fetchone()
+        if not row:
+            return {"status": "missing", "patient_id": patient_id}
+        result = dict(row)
+        result["session_summary"] = result.pop("session_summary") or ""
+        return result
+
+    def reflect_session(
+        self,
+        patient_id: str,
+        session_id: str,
+        *,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Run one post-session LLM reflection and persist only shadow candidates."""
+        patient_id = self._patient_id(patient_id)
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            raise ValueError("session_id is required")
+        with self._lock, self._connection() as conn:
+            turns = self._session_turns_for_reflection(conn, patient_id, session_id)
+        if not turns:
+            return {"status": "skipped", "patient_id": patient_id, "session_id": session_id}
+        claim = self._claim_session_reflection(patient_id, session_id, force=force)
+        if not claim.get("claimed"):
+            row = claim.get("row") or {}
+            return {
+                "status": str(row.get("status") or "pending"),
+                "patient_id": patient_id,
+                "session_id": session_id,
+                "idempotent_replay": bool(claim.get("idempotent_replay")),
+                "deferred": bool(claim.get("deferred")),
+            }
+        lease_token = str(claim["lease_token"])
+        try:
+            payload = self._reflection_payload(
+                self._invoke_session_reflector(self._reflection_prompt(turns))
+            )
+        except Exception as exc:
+            return self._fail_session_reflection(patient_id, session_id, exc, lease_token)
+
+        try:
+            with self._lock, self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if not self._reflection_claim_is_current(
+                    conn, patient_id, session_id, lease_token
+                ):
+                    return {
+                        "status": "stale",
+                        "patient_id": patient_id,
+                        "session_id": session_id,
+                    }
+                current_turns = self._session_turns_for_reflection(conn, patient_id, session_id)
+                by_reference = {
+                    reference: turn
+                    for turn in current_turns
+                    for reference in (str(turn["id"]), str(turn["turn_id"]))
+                }
+                summary = payload.get("session_summary") or {}
+                summary_text = ""
+                summary_evidence: list[dict[str, str]] = []
+                if isinstance(summary, Mapping):
+                    content = str(summary.get("content") or "").strip()
+                    references = summary.get("evidence_turn_ids") or []
+                    if isinstance(references, (list, tuple)) and content and len(content) <= 2000:
+                        resolved = [by_reference.get(str(value or "").strip()) for value in references]
+                        if resolved and all(resolved):
+                            summary_text = content
+                            summary_evidence = [
+                                {"turn_id": str(turn["turn_id"])} for turn in resolved
+                            ]
+                candidates = payload.get("memory_candidates") or []
+                if not isinstance(candidates, list):
+                    raise ValueError("memory_candidates must be a list")
+                deduplicated_candidates: list[Mapping[str, Any]] = []
+                for candidate in candidates:
+                    if not isinstance(candidate, Mapping):
+                        deduplicated_candidates.append(candidate)
+                        continue
+                    source_id = str(candidate.get("source_turn_id") or "").strip()
+                    evidence_ids = {
+                        str(value or "").strip()
+                        for value in candidate.get("evidence_turn_ids") or []
+                        if str(value or "").strip()
+                    }
+                    content = str(candidate.get("content") or "").strip()
+                    duplicate_index = next(
+                        (
+                            index
+                            for index, existing in enumerate(deduplicated_candidates)
+                            if isinstance(existing, Mapping)
+                            and source_id
+                            and source_id == str(existing.get("source_turn_id") or "").strip()
+                            and evidence_ids == {
+                                str(value or "").strip()
+                                for value in existing.get("evidence_turn_ids") or []
+                                if str(value or "").strip()
+                            }
+                            and content
+                            and (
+                                content in str(existing.get("content") or "")
+                                or str(existing.get("content") or "") in content
+                            )
+                        ),
+                        None,
+                    )
+                    if duplicate_index is None:
+                        deduplicated_candidates.append(candidate)
+                    elif len(content) > len(
+                        str(deduplicated_candidates[duplicate_index].get("content") or "")
+                    ):
+                        deduplicated_candidates[duplicate_index] = candidate
+                candidates = deduplicated_candidates
+                multi_evidence_categories = {
+                    str(candidate.get("category") or "").strip()
+                    for candidate in candidates
+                    if isinstance(candidate, Mapping)
+                    and len(candidate.get("evidence_turn_ids") or []) > 1
+                }
+                multi_evidence_turns = {
+                    str(turn_id or "").strip()
+                    for candidate in candidates
+                    if isinstance(candidate, Mapping)
+                    and len(candidate.get("evidence_turn_ids") or []) > 1
+                    for turn_id in candidate.get("evidence_turn_ids") or []
+                }
+                candidate_count = 0
+                rejected_count = 0
+                for index, candidate in enumerate(candidates):
+                    if not isinstance(candidate, Mapping):
+                        rejected_count += 1
+                        continue
+                    category = str(candidate.get("category") or "").strip()
+                    content = str(candidate.get("content") or "").strip()
+                    operation = str(candidate.get("suggested_operation") or "").upper().strip()
+                    source = by_reference.get(str(candidate.get("source_turn_id") or "").strip())
+                    references = candidate.get("evidence_turn_ids") or []
+                    quote = str(candidate.get("evidence_quote") or "").strip()
+                    if (
+                        len(references) == 1
+                        and (
+                            category in multi_evidence_categories
+                            or str(references[0] or "").strip() in multi_evidence_turns
+                        )
+                    ):
+                        rejected_count += 1
+                        continue
+                    if (
+                        category not in _REFLECTION_CATEGORIES
+                        or not content or len(content) > 500
+                        or operation not in _REFLECTION_OPERATIONS
+                        or not source or not isinstance(references, (list, tuple))
+                        or not quote or len(quote) > 240
+                    ):
+                        rejected_count += 1
+                        continue
+                    evidence_turns = [
+                        by_reference.get(str(value or "").strip()) for value in references
+                    ]
+                    if (
+                        not evidence_turns
+                        or not all(evidence_turns)
+                        or str(source["turn_id"])
+                        not in {str(turn["turn_id"]) for turn in evidence_turns}
+                    ):
+                        rejected_count += 1
+                        continue
+                    quote_bound = all(
+                        any(
+                            part.strip() in str(turn["user_message"] or "")
+                            for turn in evidence_turns
+                        )
+                        for part in (quote.splitlines() or [quote])
+                        if part.strip()
+                    )
+                    if not quote_bound:
+                        source_text = str(source["user_message"] or "")
+                        if operation == "SUPERSEDE" and any(
+                            marker in source_text for marker in _CORRECTION_MARKERS
+                        ):
+                            quote = source_text
+                        else:
+                            rejected_count += 1
+                            continue
+                    sensitivity = str(candidate.get("sensitivity") or "").lower().strip()
+                    try:
+                        confidence = float(candidate.get("confidence"))
+                    except (TypeError, ValueError):
+                        confidence = -1.0
+                    observed_at = str(candidate.get("observed_at") or "").strip()
+                    valid_until = candidate.get("valid_until")
+                    try:
+                        datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+                        if valid_until not in (None, ""):
+                            datetime.fromisoformat(str(valid_until).replace("Z", "+00:00"))
+                    except ValueError:
+                        observed_at = str(source["created_at"] or "").strip()
+                        try:
+                            datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
+                        except ValueError:
+                            rejected_count += 1
+                            continue
+                    if sensitivity not in {"normal", "sensitive", "high"} or not 0 <= confidence <= 1:
+                        rejected_count += 1
+                        continue
+                    source_text = str(source["user_message"] or "")
+                    denies_non_memory_fact = _direct_non_memory_denial(source_text) and not any(
+                        marker in source_text for marker in _UNCERTAINTY_MARKERS
+                    )
+                    if denies_non_memory_fact:
+                        rejected_count += 1
+                        continue
+                    short_ephemeral_turn = (
+                        len(source_text) <= 8
+                        and any(marker in source_text for marker in _EPHEMERAL_CONTEXT_MARKERS)
+                        and not any(marker in source_text for marker in _LONG_TERM_SEMANTIC_MARKERS)
+                    )
+                    if short_ephemeral_turn:
+                        rejected_count += 1
+                        continue
+                    source_has_uncertainty = any(
+                        marker in source_text for marker in _UNCERTAINTY_MARKERS
+                    )
+                    if source_has_uncertainty and not any(
+                        marker in content for marker in _UNCERTAINTY_MARKERS
+                    ):
+                        content = source_text
+                    temporary_refusal = (
+                        category == "boundaries"
+                        and any(marker in source_text for marker in _TEMPORARY_SCOPE_MARKERS)
+                        and any(marker in source_text for marker in _TEMPORARY_REFUSAL_MARKERS)
+                    )
+                    source_has_time_scope = any(marker in source_text for marker in _TEMPORARY_SCOPE_MARKERS) or any(
+                        marker in source_text
+                        for marker in ("前些年", "十年前", "年轻时", "小时候", "去年")
+                    )
+                    source_time_markers = [
+                        marker for marker in (
+                            *_TEMPORARY_SCOPE_MARKERS,
+                            "前些年", "十年前", "年轻时", "小时候", "去年",
+                        )
+                        if marker in source_text
+                    ]
+                    if source_has_time_scope and valid_until in (None, "") and any(
+                        marker not in content for marker in source_time_markers
+                    ):
+                        content = source_text
+                    source_has_affect = any(marker in source_text for marker in _AFFECTIVE_MARKERS)
+                    if source_has_affect and not any(
+                        marker in content for marker in _AFFECTIVE_MARKERS
+                    ):
+                        content = source_text
+                    if "住" in source_text and not any(
+                        marker in content for marker in ("住", "居住")
+                    ):
+                        content = source_text
+                    if temporary_refusal:
+                        has_scope = (
+                            any(marker in content for marker in _TEMPORARY_SCOPE_MARKERS)
+                            or "前" in content
+                            or valid_until not in (None, "")
+                        )
+                        if not has_scope:
+                            rejected_count += 1
+                            continue
+                    if operation in {"NOOP", "BLOCK"}:
+                        continue
+                    source_turn_id = str(source["turn_id"])
+                    evidence_json = [
+                        {"turn_id": str(turn["turn_id"])} for turn in evidence_turns
+                    ]
+                    evidence_json[0]["quote"] = quote
+                    item_id = uuid.uuid5(
+                        uuid.NAMESPACE_URL,
+                        f"lmca-reflection:{claim['idempotency_key']}:{index}:{content}",
+                    ).hex
+                    if not conn.execute(
+                        f"SELECT 1 FROM {_MEMORY_ITEM_TABLE} WHERE item_id=?", (item_id,)
+                    ).fetchone():
+                        self._insert_memory_item(
+                            conn,
+                            patient_id,
+                            category,
+                            content,
+                            item_id=item_id,
+                            source="llm_shadow",
+                            source_session_id=session_id,
+                            source_turn_id=source_turn_id,
+                            status="candidate",
+                            slot_key=str(candidate.get("slot_key") or "").strip()[:128] or None,
+                            observed_at=observed_at,
+                            valid_until=str(valid_until).strip() if valid_until not in (None, "") else None,
+                            sensitivity=sensitivity,
+                            confidence=confidence,
+                            evidence_json=json.dumps(evidence_json, ensure_ascii=False),
+                            metadata={
+                                "shadow": True,
+                                "suggested_operation": operation,
+                                "evidence_quote": quote,
+                            },
+                        )
+                    candidate_count += 1
+                now = _now()
+                conn.execute(
+                    f"""UPDATE {_SESSION_REFLECTION_TABLE}
+                        SET status='succeeded', session_summary=?, summary_evidence_json=?,
+                            next_retry_at=NULL, last_error=NULL, lease_until=NULL,
+                            lease_token=NULL,
+                            completed_at=?, updated_at=?
+                        WHERE patient_id=? AND session_id=? AND status='running'
+                          AND lease_token=?""",
+                    (
+                        summary_text or None,
+                        json.dumps(summary_evidence, ensure_ascii=False) if summary_evidence else None,
+                        now,
+                        now,
+                        patient_id,
+                        session_id,
+                        lease_token,
+                    ),
+                )
+        except Exception as exc:
+            return self._fail_session_reflection(patient_id, session_id, exc, lease_token)
+        return {
+            "status": "succeeded",
+            "patient_id": patient_id,
+            "session_id": session_id,
+            "candidate_count": candidate_count,
+            "rejected_count": rejected_count,
         }
 
     def _replay_unsynced_impl(self, patient_id: str, force: bool = False) -> bool:
@@ -2910,13 +4616,23 @@ class EmotionMemobase:
         if not rows:
             self._set_sync_state(patient_id, lease_until=None)
             return True
+        with self._lock, self._connection() as conn:
+            invalidated = self._deleted_turn_ids(conn, patient_id)
+        rows_to_mirror = [
+            row
+            for row in rows
+            if not ({str(row["id"]), str(row["turn_id"] or "")} & invalidated)
+        ]
+        if not rows_to_mirror:
+            self._mark_turn_synced(patient_id, int(rows[-1]["id"]))
+            return True
         client = self._ensure_memobase()
         if client is None:
             self._mark_sync_failed(patient_id, RuntimeError("memobase unavailable"))
             return False
         try:
             user = self._get_or_create_memobase_user(client, patient_id)
-            for row in rows:
+            for row in rows_to_mirror:
                 emotion = json.loads(row["emotion_json"] or "{}")
                 from memobase import ChatBlob
 
