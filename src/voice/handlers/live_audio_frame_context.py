@@ -18,3 +18,4 @@ class LiveAudioFrameContext:
     early_listen_mode: bool = False
     vad_end_sent: bool = False
     realtime_turn: Any = None
+    final_recognition: dict | None = None

@@ -102,7 +102,10 @@ class TextTurnHandler:
             return True
 
         self.session.processing.is_active = True
+        self.session.runtime.stop_generate = False
         processing = self.session.processing
+        current_task = asyncio.current_task()
+        processing.task = current_task
         processing.generation += 1
         processing.active_turn_id = turn_id
         processing.active_playback_id = (
@@ -198,7 +201,13 @@ class TextTurnHandler:
             self._log(f"[文字输入] ❌ 处理失败: {type(exc).__name__}")
             await self._send_failure_response(turn_id)
         finally:
-            self.session.processing.is_active = False
+            if processing.task is current_task:
+                processing.task = None
+                processing.is_active = False
+                processing.active_audio = None
+                processing.active_source = ""
+                processing.active_turn_id = ""
+                processing.active_playback_id = ""
         return True
 
     async def _record_risk(self, decision, turn_id: str) -> None:
@@ -463,7 +472,7 @@ class TextTurnHandler:
                 emotion="neutral",
                 label=f"-text-S{sentence_index}",
                 event_type="tts_chunk",
-                allow_interrupt=False,
+                allow_interrupt=True,
                 include_dtype=True,
                 persist=False,
                 start_payload=(
@@ -610,7 +619,7 @@ class TextTurnHandler:
                 emotion="neutral",
                 label="-text-fallback",
                 event_type="tts_chunk",
-                allow_interrupt=False,
+                allow_interrupt=True,
                 include_dtype=True,
                 persist=False,
                 start_payload={
@@ -654,7 +663,7 @@ class TextTurnHandler:
             emotion="neutral",
             label="-text-sync",
             event_type="tts_chunk",
-            allow_interrupt=False,
+            allow_interrupt=True,
             include_dtype=True,
             persist=False,
             start_payload={

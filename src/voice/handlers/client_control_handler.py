@@ -4,6 +4,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 import json
+import math
+import time
 
 class ClientControlHandler:
     """Handle lightweight connection controls that do not belong to a session turn."""
@@ -62,6 +64,35 @@ class ClientControlHandler:
         if area == "tts" and any(
             label.startswith(prefix) for prefix in self._NOISY_TTS_LABELS
         ):
+            return
+        detail_preview = " ".join(detail.split())[:320]
+        if area == "tts" and label == "playback-stopped":
+            try:
+                payload = json.loads(detail)
+            except (TypeError, ValueError):
+                payload = {}
+            if isinstance(payload, dict):
+                timings = {
+                    key: value for key, value in payload.items()
+                    if key in {
+                        "server_stop_at_ms", "client_received_at_ms",
+                        "client_stopped_at_ms", "stop_handler_ms", "generation",
+                    }
+                    and isinstance(value, (int, float))
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                }
+                timings["server_ack_at_ms"] = round(time.time() * 1000, 1)
+                self._log(f"[全双工停播确认] {json.dumps(timings)}")
+            return
+        if area == "tts" and (
+            "exception" in label.casefold()
+            or "failed" in label.casefold()
+        ):
+            self._log(
+                f"[CLIENT-DIAG][{area}] #{seq} {label} | "
+                f"detail={detail_preview or '-'}"
+            )
             return
         self._log(
             f"[CLIENT-DIAG][{area}] #{seq} {label} | "

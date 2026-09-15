@@ -183,6 +183,7 @@ class VoiceAudioStore:
         save_audio: Callable[..., Any],
         manifest_store: VoiceDatasetManifestStore,
         write_audio: Callable[[Path, np.ndarray, int], Any] | None = None,
+        on_assistant_persist: Callable[[dict[str, Any], str], Any] | None = None,
         now_factory: Callable[[], datetime] = datetime.now,
         token_factory: Callable[[], str] | None = None,
     ) -> None:
@@ -190,6 +191,7 @@ class VoiceAudioStore:
         self._save_audio = save_audio
         self._manifest_store = manifest_store
         self._write_audio = write_audio or self._write_soundfile
+        self._on_assistant_persist = on_assistant_persist
         self._now_factory = now_factory
         self._token_factory = token_factory or (lambda: uuid.uuid4().hex[:6])
 
@@ -214,7 +216,7 @@ class VoiceAudioStore:
         audio_data: Any,
         content_text: str = "",
     ) -> dict[str, Any] | None:
-        return self.persist(
+        result = self.persist(
             audio_data,
             role="assistant",
             sample_rate=24000,
@@ -222,6 +224,12 @@ class VoiceAudioStore:
             file_prefix="assistant",
             content_text=content_text,
         )
+        if result and self._on_assistant_persist is not None:
+            try:
+                self._on_assistant_persist(result, content_text or "")
+            except Exception as exc:
+                print(f"[数字人渲染] ⚠️ 触发视频渲染失败: {type(exc).__name__}")
+        return result
 
     def persist(
         self,

@@ -7,12 +7,16 @@ import json
 from pathlib import Path
 import tempfile
 import threading
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 from unittest import mock
 
 import numpy as np
 
+from src.tools.voice.soulx_turn_taking import SoulXAudioAccumulator, SoulXTurnState
+from src.voice.handlers.live_audio_frame_context import LiveAudioFrameContext
+from src.voice.services import SpeechProcessingCoordinator
 from src.voice.handlers import (
     AgentOutputPresenter,
     AnswerCompletionMessageHandler,
@@ -36,6 +40,7 @@ from src.voice.handlers import (
     VoiceMessageRouter,
 )
 from src.voice.answer_completion import AnswerCompletionState
+from src.voice.realtime_companion import RealtimeCompanion, RealtimeCompanionConfig, RealtimeTurn
 from src.voice.session import VoiceSession, VoiceTurnTakingState
 
 
@@ -352,6 +357,24 @@ class VoiceMessageRouterTests(unittest.TestCase):
 
 
 class ClientControlHandlerTests(unittest.TestCase):
+    def test_playback_stop_ack_logs_only_numeric_timing_fields(self):
+        async def scenario():
+            logs = []
+            handler = ClientControlHandler(_FakeConnection(), logger=logs.append)
+            await handler.handle_message({
+                "type": "client_diag", "area": "tts", "label": "playback-stopped",
+                "detail": json.dumps({
+                    "server_stop_at_ms": 1000.0, "client_received_at_ms": 1050,
+                    "client_stopped_at_ms": 1052, "stop_handler_ms": 2,
+                    "generation": 3, "text": "must not be logged",
+                }),
+            })
+            self.assertEqual(len(logs), 1)
+            self.assertIn('"stop_handler_ms": 2', logs[0])
+            self.assertIn('"server_ack_at_ms":', logs[0])
+            self.assertNotIn("must not be logged", logs[0])
+        asyncio.run(scenario())
+
     def test_ping_and_diagnostics_are_handled_without_session_state(self):
         async def scenario():
             connection = _FakeConnection()
@@ -379,6 +402,27 @@ class ClientControlHandlerTests(unittest.TestCase):
             self.assertEqual(connection.sent, [{"type": "pong"}])
             self.assertEqual(len(logs), 1)
             self.assertIn("microphone-ready", logs[0])
+
+        asyncio.run(scenario())
+
+    def test_tts_exception_diagnostic_logs_sanitized_detail(self):
+        async def scenario():
+            connection = _FakeConnection()
+            logs = []
+            handler = ClientControlHandler(connection, logger=logs.append)
+
+            await handler.handle_message(
+                {
+                    "type": "client_diag",
+                    "area": "tts",
+                    "label": "player:addChunk:exception",
+                    "seq": 9,
+                    "detail": "missing audio\nchunk",
+                }
+            )
+
+            self.assertEqual(len(logs), 1)
+            self.assertIn("detail=missing audio chunk", logs[0])
 
         asyncio.run(scenario())
 
@@ -896,6 +940,9 @@ class SessionLifecycleHandlerTests(unittest.TestCase):
                     "type": "start_session",
                     "patient_id": "patient-1",
                     "profile": {"name": " 张阿姨 ", "gender": "女"},
+                    "long_term_memory_enabled": True,
+                    "long_term_memory_writes_enabled": False,
+                    "emotion_enabled": False,
                 }
             )
 
@@ -929,6 +976,11 @@ class SessionLifecycleHandlerTests(unittest.TestCase):
                 if payload["type"] == "session_started"
             )
             self.assertEqual(session_started["mode"], "wellbeing")
+            self.assertTrue(session_started["long_term_memory_enabled"])
+            self.assertFalse(session_started["long_term_memory_writes_enabled"])
+            self.assertFalse(session_started["emotion_enabled"])
+            self.assertFalse(context.session.long_term_memory_writes_enabled)
+            self.assertFalse(context.session.emotion_enabled)
             self.assertEqual(context.session.runtime.ai_speaking_until, 101.0)
             self.assertEqual(len(context.session.chat_history), 1)
             self.assertIn("张阿姨女士", context.session.chat_history[0]["content"])
@@ -2454,6 +2506,80 @@ class SpeechTurnProcessorTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_session_emotion_ablation_skips_audio_model_and_reports_disabled(self):
+        async def scenario():
+            context = self._build_processor()
+            context.session.emotion_enabled = False
+
+            with mock.patch(
+                "src.voice.handlers.speech_turn_processor."
+                "classify_multimodal_with_metadata"
+            ) as classifier:
+                await context.processor.process(
+                    np.ones(16000, dtype=np.float32),
+                    process_generation_token=3,
+                    turn_id="turn-emotion-off",
+                )
+
+            classifier.assert_not_called()
+            final = next(
+                payload
+                for payload in context.connection.sent
+                if payload.get("type") == "turn_insight"
+                and payload.get("state") == "final"
+            )
+            self.assertEqual(final["emotion"]["source"], "disabled")
+            self.assertEqual(final["emotion"]["analysis_status"], "disabled")
+
+        asyncio.run(scenario())
+
+    def test_agent_receives_final_emotion_after_multimodal_inference(self):
+        async def scenario():
+            context = self._build_processor()
+            final_scores = {
+                "joy": 0.02,
+                "sadness": 0.82,
+                "anger": 0.01,
+                "fear": 0.03,
+                "anxiety": 0.05,
+                "calm": 0.05,
+                "confusion": 0.02,
+            }
+            final_metadata = {
+                "source": "emotion2vec_audio+text",
+                "audio_model_used": True,
+                "inference_ms": 29.0,
+            }
+            with mock.patch(
+                "src.voice.handlers.speech_turn_processor."
+                "classify_multimodal_with_metadata",
+                return_value=(final_scores, final_metadata),
+            ) as classifier:
+                await context.processor.process(
+                    np.ones(16000, dtype=np.float32),
+                    process_generation_token=3,
+                    turn_id="turn-final-emotion",
+                )
+
+            classifier.assert_called_once()
+            self.assertEqual(len(context.agent.process_calls), 1)
+            self.assertEqual(
+                context.agent.process_calls[0]["current_emotion"],
+                "sadness",
+            )
+            final_insight = [
+                payload
+                for payload in context.connection.sent
+                if payload.get("type") == "turn_insight"
+                and payload.get("state") == "final"
+            ][-1]
+            self.assertEqual(
+                final_insight["emotion"]["source"],
+                "emotion2vec_audio+text",
+            )
+
+        asyncio.run(scenario())
+
     def test_slow_memory_lookup_skips_long_term_memory_without_sqlite_fallback(self):
         async def scenario():
             context = self._build_processor(memory_timeout_s=0.01)
@@ -2520,6 +2646,38 @@ class SpeechTurnProcessorTests(unittest.TestCase):
                     "turn_state": "RESPONDED",
                 },
             )
+
+        asyncio.run(scenario())
+
+    def test_cancelling_turn_during_emotion_wait_propagates(self):
+        async def scenario():
+            context = self._build_processor()
+            started = asyncio.Event()
+
+            async def infer():
+                started.set()
+                await asyncio.Event().wait()
+
+            emotion_task = asyncio.create_task(infer())
+            turn = SimpleNamespace(emotion_task=emotion_task)
+            owner = asyncio.create_task(context.processor._await_emotion_task(turn))
+            await started.wait()
+            await asyncio.sleep(0)
+            owner.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await owner
+            self.assertTrue(emotion_task.cancelled())
+
+        asyncio.run(scenario())
+
+    def test_independently_cancelled_emotion_task_keeps_text_fallback(self):
+        async def scenario():
+            context = self._build_processor()
+            emotion_task = asyncio.create_task(asyncio.sleep(60))
+            emotion_task.cancel()
+            turn = SimpleNamespace(emotion_task=emotion_task)
+            await context.processor._await_emotion_task(turn)
+            self.assertIsNone(turn.emotion_task)
 
         asyncio.run(scenario())
 
@@ -2708,6 +2866,76 @@ class SpeechTurnProcessorTests(unittest.TestCase):
                 [payload["type"] for payload in context.connection.sent],
                 ["asr_error"],
             )
+
+        asyncio.run(scenario())
+
+    def test_completed_interrupt_asr_is_reused_for_formal_turn(self):
+        async def scenario():
+            context = self._build_processor(use_ark_asr=True)
+            audio = np.ones(16000, dtype=np.float32)
+            from src.tools.voice import ark_asr
+
+            with mock.patch.object(ark_asr, "ark_asr_recognize") as recognize:
+                await context.processor.process(
+                    audio,
+                    process_generation_token=3,
+                    turn_id="turn-reused-final",
+                    extra_meta={
+                        "final_asr_result": {
+                            "text": "我心情真的很不好。", "source": "streaming_final",
+                            "emotion": "neutral", "language": "zh", "event": "speech",
+                        },
+                        "final_asr_audio_samples": len(audio),
+                    },
+                )
+            recognize.assert_not_called()
+            self.assertEqual(context.agent.process_calls[0]["user_input"], "我心情真的很不好。")
+
+        asyncio.run(scenario())
+
+    def test_cached_partial_or_different_audio_is_recognized_again(self):
+        async def scenario(source, sample_count):
+            context = self._build_processor(use_ark_asr=True)
+            from src.tools.voice import ark_asr
+
+            recognize = mock.AsyncMock(return_value={
+                "text": "完整音频的最终文字", "source": "fallback_final",
+                "emotion": "neutral", "language": "zh", "event": "speech",
+            })
+            with mock.patch.object(ark_asr, "ark_asr_recognize", recognize):
+                await context.processor.process(
+                    np.ones(16000, dtype=np.float32),
+                    process_generation_token=3,
+                    turn_id="turn-needs-full-asr",
+                    extra_meta={
+                        "final_asr_result": {"text": "只有片段", "source": source},
+                        "final_asr_audio_samples": sample_count,
+                    },
+                )
+            recognize.assert_awaited_once()
+            self.assertEqual(context.agent.process_calls[0]["user_input"], "完整音频的最终文字")
+
+        for source, size in (("partial", 16000), ("streaming_final", 8000)):
+            with self.subTest(source=source, size=size):
+                asyncio.run(scenario(source, size))
+
+    def test_empty_final_asr_reports_feedback_and_keeps_audio_without_answering(self):
+        async def scenario():
+            context = self._build_processor(use_ark_asr=True)
+            from src.tools.voice import ark_asr
+
+            with mock.patch.object(ark_asr, "ark_asr_recognize", mock.AsyncMock(return_value={"text": ""})):
+                await context.processor.process(
+                    np.ones(16000, dtype=np.float32),
+                    process_generation_token=3,
+                    turn_id="turn-empty-final",
+                )
+            self.assertEqual(context.agent.process_calls, [])
+            self.assertEqual(len(context.audio_store.user_persisted), 1)
+            errors = [item for item in context.connection.sent if item["type"] == "asr_error"]
+            self.assertEqual(len(errors), 1)
+            self.assertEqual(errors[0]["turn_id"], "turn-empty-final")
+            self.assertEqual(errors[0]["reason"], "empty_final_transcript")
 
         asyncio.run(scenario())
 
@@ -2918,6 +3146,10 @@ class SoulXAudioHandlerTests(unittest.TestCase):
         accumulator,
         is_ai_speaking=lambda: False,
         enabled_full_duplex=True,
+        realtime_companion=None,
+        barge_in_minimum_chunk_rms=0.0,
+        is_processing=None,
+        interrupt_active_processing=None,
     ):
         connection = _FakeConnection()
         speaker = _FakeSoulXSpeaker()
@@ -2959,6 +3191,10 @@ class SoulXAudioHandlerTests(unittest.TestCase):
             server_url="ws://soulx.test/turn",
             enabled_full_duplex=enabled_full_duplex,
             minimum_utterance_rms=0.01,
+            barge_in_minimum_chunk_rms=barge_in_minimum_chunk_rms,
+            is_processing=is_processing,
+            interrupt_active_processing=interrupt_active_processing,
+            realtime_companion=realtime_companion,
             logger=lambda _message: None,
         )
         return SimpleNamespace(
@@ -3001,6 +3237,32 @@ class SoulXAudioHandlerTests(unittest.TestCase):
                 context.turn_state.soulx_last_error,
                 "connection refused",
             )
+
+        asyncio.run(scenario())
+
+    def test_soulx_not_ready_switches_realtime_companion_to_local_asr(self):
+        async def scenario():
+            class Companion:
+                def __init__(self):
+                    self.external_asr = None
+
+                def set_external_asr(self, enabled):
+                    self.external_asr = enabled
+
+            companion = Companion()
+
+            class Client:
+                retry_ready = False
+
+            context = self._build_handler(
+                client=Client(),
+                accumulator=_FakeSoulXAccumulator(),
+                realtime_companion=companion,
+            )
+            assert not await context.handler.handle_audio(
+                np.ones(2560, dtype=np.float32)
+            )
+            assert companion.external_asr is False
 
         asyncio.run(scenario())
 
@@ -3273,6 +3535,161 @@ class SoulXAudioHandlerTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_nonidle_cancels_pending_generation_before_it_starts_playing(self):
+        async def scenario():
+            session = VoiceSession(connection=_FakeConnection(), agent=None, owner_username="test")
+            started = asyncio.Event()
+
+            async def old_generation():
+                try:
+                    started.set()
+                    await asyncio.Event().wait()
+                finally:
+                    session.processing.is_active = False
+
+            task = asyncio.create_task(old_generation())
+            session.processing.task = task
+            session.processing.is_active = True
+            session.processing.revision_enabled = True
+            await started.wait()
+            coordinator = SpeechProcessingCoordinator(
+                session, processor=None, enabled_full_duplex=True,
+                is_ai_speaking=lambda: False, stop_playback=mock.AsyncMock(),
+                disconnect_error_type=RuntimeError, client_id="test", logger=lambda _: None,
+            )
+
+            class Client:
+                retry_ready = True
+
+                async def process(self, _audio):
+                    return SoulXTurnState(state="nonidle", asr_buffer="我今天", chunk_rms=0.08)
+
+            context = self._build_handler(
+                client=Client(), accumulator=_FakeSoulXAccumulator(),
+                is_processing=lambda: session.processing.is_active,
+                interrupt_active_processing=coordinator.interrupt_active,
+            )
+            self.assertTrue(await context.handler.handle_audio(np.ones(2560, dtype=np.float32)))
+            self.assertTrue(task.cancelled())
+            self.assertTrue(context.turn_state.soulx_barge_in_active)
+            self.assertEqual(context.submissions, [])
+
+        asyncio.run(scenario())
+
+    def test_speak_cancels_pending_generation_before_submitting_next_turn(self):
+        async def scenario():
+            order = []
+
+            async def cancel(_reason):
+                order.append("cancel")
+
+            async def submit(_audio, **_kwargs):
+                order.append("submit")
+
+            context = self._build_handler(
+                client=None, accumulator=_FakeSoulXAccumulator(),
+                is_processing=lambda: True, interrupt_active_processing=cancel,
+            )
+            context.handler._submit_speech = submit
+            await context.handler._handle_speak(
+                SoulXTurnState(state="speak", text="我今天心情不太好。"),
+                np.ones(16000, dtype=np.float32),
+            )
+            self.assertEqual(order, ["cancel", "submit"])
+
+        asyncio.run(scenario())
+
+    def test_low_energy_nonidle_does_not_interrupt_when_gate_is_set(self):
+        async def scenario():
+            class Client:
+                retry_ready = True
+
+                async def process(self, _audio):
+                    return SimpleNamespace(
+                        state="nonidle",
+                        text="嗯",
+                        asr_buffer="嗯",
+                        chunk_rms=0.002,
+                    )
+
+            context = self._build_handler(
+                client=Client(),
+                accumulator=_FakeSoulXAccumulator(),
+                is_ai_speaking=lambda: True,
+                barge_in_minimum_chunk_rms=0.01,
+            )
+
+            consumed = await context.handler.handle_audio(
+                np.ones(2560, dtype=np.float32)
+            )
+
+            self.assertTrue(consumed)
+            self.assertEqual(context.stopped, [])
+            self.assertFalse(context.turn_state.soulx_barge_in_active)
+
+        asyncio.run(scenario())
+
+    def test_loud_nonidle_still_interrupts_when_gate_is_set(self):
+        async def scenario():
+            class Client:
+                retry_ready = True
+
+                async def process(self, _audio):
+                    return SimpleNamespace(
+                        state="nonidle",
+                        text="等一下",
+                        asr_buffer="等一下",
+                        chunk_rms=0.05,
+                    )
+
+            context = self._build_handler(
+                client=Client(),
+                accumulator=_FakeSoulXAccumulator(),
+                is_ai_speaking=lambda: True,
+                barge_in_minimum_chunk_rms=0.01,
+            )
+
+            consumed = await context.handler.handle_audio(
+                np.ones(2560, dtype=np.float32)
+            )
+
+            self.assertTrue(consumed)
+            self.assertEqual(context.stopped, [True])
+            self.assertTrue(context.turn_state.soulx_barge_in_active)
+
+        asyncio.run(scenario())
+
+    def test_missing_chunk_rms_still_interrupts_rather_than_blocking(self):
+        """A server that omits chunk_rms must not silently disable barge-in."""
+
+        async def scenario():
+            class Client:
+                retry_ready = True
+
+                async def process(self, _audio):
+                    return SimpleNamespace(
+                        state="nonidle",
+                        text="等一下",
+                        asr_buffer="等一下",
+                    )
+
+            context = self._build_handler(
+                client=Client(),
+                accumulator=_FakeSoulXAccumulator(),
+                is_ai_speaking=lambda: True,
+                barge_in_minimum_chunk_rms=0.01,
+            )
+
+            consumed = await context.handler.handle_audio(
+                np.ones(2560, dtype=np.float32)
+            )
+
+            self.assertTrue(consumed)
+            self.assertEqual(context.stopped, [True])
+            self.assertTrue(context.turn_state.soulx_barge_in_active)
+
+        asyncio.run(scenario())
+
     def test_speak_submits_complete_audio_with_soulx_metadata(self):
         async def scenario():
             class Client:
@@ -3350,6 +3767,160 @@ class SoulXAudioHandlerTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_speak_passes_soulx_turn_to_formal_processor(self):
+        async def scenario():
+            class Client:
+                retry_ready = True
+
+                async def process(self, _audio):
+                    return SimpleNamespace(
+                        state="speak",
+                        text="完整表达",
+                        asr_buffer="完整表达",
+                    )
+
+            realtime_turn = object()
+
+            class Companion:
+                def __init__(self):
+                    self.external_asr = []
+                    self.frames = []
+
+                def set_external_asr(self, enabled):
+                    self.external_asr.append(enabled)
+
+                async def observe_soulx_frame(
+                    self, audio, *, state, text, detail_state, speech_detected,
+                    complete_audio
+                ):
+                    self.frames.append(
+                        (audio, state, text, complete_audio, detail_state, speech_detected)
+                    )
+                    return realtime_turn
+
+            companion = Companion()
+            context = self._build_handler(
+                client=Client(),
+                accumulator=_FakeSoulXAccumulator(
+                    complete_audio=np.ones(4000, dtype=np.float32)
+                ),
+                realtime_companion=companion,
+            )
+
+            assert await context.handler.handle_audio(
+                np.ones(2560, dtype=np.float32)
+            )
+            assert companion.external_asr == [True]
+            assert len(companion.frames) == 1
+            assert companion.frames[0][1:3] == ("speak", "完整表达")
+            assert companion.frames[0][4:] == ("", None)
+            assert context.submissions[0][1]["extra_meta"]["realtime_turn"] is realtime_turn
+
+        asyncio.run(scenario())
+
+    def test_native_soulx_frames_select_short_acknowledgement_and_allow_speech(self):
+        async def scenario():
+            state = SoulXTurnState(
+                state="nonidle", detail_state="incomplete", speech_detected=True
+            )
+
+            class Client:
+                retry_ready = True
+
+                async def process(self, _audio):
+                    return state
+
+            connection = _FakeConnection()
+            spoken = []
+            playing = asyncio.Event()
+
+            async def stream_tts(text, **_kwargs):
+                spoken.append(text)
+                playing.set()
+                await asyncio.Event().wait()
+
+            companion = RealtimeCompanion(
+                connection,
+                session=VoiceSession(connection=connection, agent=None, owner_username="test"),
+                patient_memory_service=None,
+                stream_tts_audio=stream_tts,
+                config=RealtimeCompanionConfig(enabled=True, external_asr=True),
+                classify_window=lambda *_args: {},
+            )
+            context = self._build_handler(
+                client=Client(), accumulator=SoulXAudioAccumulator(),
+                realtime_companion=companion,
+                is_ai_speaking=playing.is_set,
+            )
+            for _ in range(31):
+                await context.handler.handle_audio(np.ones(2560, dtype=np.float32))
+                await asyncio.sleep(0)
+            self.assertEqual(spoken, [])
+            await context.handler.handle_audio(np.ones(2560, dtype=np.float32))
+            await asyncio.wait_for(playing.wait(), timeout=1.0)
+            for _ in range(3):
+                await context.handler.handle_audio(np.ones(2560, dtype=np.float32))
+                await asyncio.sleep(0)
+            self.assertEqual(spoken, ["嗯嗯"])
+            self.assertEqual(context.stopped, [])
+            self.assertTrue(companion.backchannel_playing)
+            await companion.reset()
+
+        asyncio.run(scenario())
+
+    def test_soulx_pause_prompt_stops_when_patient_resumes_even_after_prior_barge_in(self):
+        async def scenario():
+            state = SoulXTurnState(
+                state="nonidle", detail_state="listening", speech_detected=True
+            )
+
+            class Client:
+                retry_ready = True
+
+                async def process(self, _audio):
+                    return state
+
+            spoken = []
+            playing = asyncio.Event()
+
+            async def stream_tts(text, **_kwargs):
+                spoken.append(text)
+                playing.set()
+                await asyncio.Event().wait()
+
+            connection = _FakeConnection()
+            companion = RealtimeCompanion(
+                connection,
+                session=VoiceSession(connection=connection, agent=None, owner_username="test"),
+                patient_memory_service=None,
+                stream_tts_audio=stream_tts,
+                config=RealtimeCompanionConfig(enabled=True, external_asr=True),
+                classify_window=lambda *_args: {},
+            )
+            context = self._build_handler(
+                client=Client(), accumulator=SoulXAudioAccumulator(),
+                realtime_companion=companion, is_ai_speaking=playing.is_set,
+            )
+            for _ in range(43):
+                await context.handler.handle_audio(np.ones(2560, dtype=np.float32))
+            state = SoulXTurnState(
+                state="idle", detail_state="incomplete_wait", speech_detected=False
+            )
+            await context.handler.handle_audio(np.zeros(2560, dtype=np.float32))
+            await asyncio.wait_for(playing.wait(), timeout=1.0)
+            self.assertEqual(spoken, ["我在听，您慢慢说。"])
+            context.turn_state.soulx_barge_in_active = True
+            playback = companion._comfort_task
+            state = SoulXTurnState(
+                state="idle", detail_state="incomplete", speech_detected=True
+            )
+            await context.handler.handle_audio(np.ones(2560, dtype=np.float32))
+            self.assertEqual(context.stopped, [True])
+            self.assertTrue(playback.cancelled())
+            await companion.reset()
+
+        asyncio.run(scenario())
+
     def test_entrypoint_delegates_soulx_state_machine_to_handler(self):
         application = _voice_application_class()
         direct_client_process_calls = [
@@ -3418,6 +3989,64 @@ class _FakeSoulXRoute:
 
 
 class LiveAudioInputHandlerTests(unittest.TestCase):
+    def test_sparse_noise_cannot_accumulate_into_an_early_stop(self):
+        async def scenario():
+            context = self._build_handler(started=True)
+            handler = context.handler
+            handler.config = replace(handler.config, enabled_full_duplex=True)
+            handler._is_ai_speaking = lambda *_: True
+            handler._stop_playback = mock.AsyncMock()
+            handler.vad_buffer._chunk_rms = lambda _: 0.1
+            for probability in [0.95, 0.95, 0.05] * 10:
+                handler.vad_buffer.has_speech = lambda _, p=probability: p
+                await handler.handle_message({
+                    "type": "audio", "_audio_float": np.full(512, 0.1, dtype=np.float32),
+                })
+            handler._stop_playback.assert_not_awaited()
+        asyncio.run(scenario())
+
+    def test_seven_voiced_frames_stop_ai_without_waiting_for_recognition(self):
+        async def scenario():
+            context = self._build_handler(started=True)
+            handler = context.handler
+            handler.config = replace(handler.config, enabled_full_duplex=True)
+            handler._is_ai_speaking = lambda *_: True
+            handler._stop_playback = mock.AsyncMock()
+            handler._quick_asr = mock.AsyncMock(side_effect=AssertionError("slow ASR"))
+            handler.vad_buffer._chunk_rms = lambda _: 0.1
+            handler.vad_buffer.has_speech = lambda _: 0.95
+            for _ in range(6):
+                await handler.handle_message({
+                    "type": "audio", "_audio_float": np.full(512, 0.1, dtype=np.float32),
+                })
+            handler._stop_playback.assert_not_awaited()
+            await handler.handle_message({
+                "type": "audio", "_audio_float": np.full(512, 0.1, dtype=np.float32),
+            })
+            handler._stop_playback.assert_awaited_once()
+            handler._quick_asr.assert_not_awaited()
+            self.assertEqual(context.vad_buffer.reset_count, 0)
+        asyncio.run(scenario())
+
+    def test_scheduled_backchannel_is_not_cut_off_by_patient_speech(self):
+        async def scenario():
+            context = self._build_handler(started=True)
+            handler = context.handler
+            handler.config = replace(handler.config, enabled_full_duplex=True)
+            handler._is_ai_speaking = lambda *_: True
+            handler._stop_playback = mock.AsyncMock()
+            handler.vad_buffer._chunk_rms = lambda _: 0.1
+            handler.vad_buffer.has_speech = lambda _: 0.95
+            handler._realtime_companion = SimpleNamespace(
+                backchannel_playing=True, observe_frame=mock.AsyncMock(return_value=None),
+            )
+            for _ in range(12):
+                await handler.handle_message({
+                    "type": "audio", "_audio_float": np.full(512, 0.1, dtype=np.float32),
+                })
+            handler._stop_playback.assert_not_awaited()
+        asyncio.run(scenario())
+
     @staticmethod
     def _build_handler(*, started, complete_audio=None, soulx_consumed=False):
         connection = _FakeConnection()
@@ -3502,6 +4131,185 @@ class LiveAudioInputHandlerTests(unittest.TestCase):
             handler=handler,
         )
 
+    def test_revision_stops_playback_when_generation_finishes_during_final_asr(self):
+        async def scenario():
+            context = self._build_handler(started=True)
+            processing = context.session.processing
+            processing.is_active = True
+            processing.revision_enabled = True
+            processing.active_audio = np.ones(16000, dtype=np.float32)
+            playing = []
+            stops = []
+
+            async def stop():
+                stops.append(True)
+                playing.clear()
+
+            coordinator = SpeechProcessingCoordinator(
+                context.session, processor=None, enabled_full_duplex=True,
+                is_ai_speaking=lambda: bool(playing), stop_playback=stop,
+                disconnect_error_type=RuntimeError, client_id="test", logger=lambda _: None,
+            )
+
+            class RealtimeTurn:
+                has_final = True
+                stream_error = None
+
+                async def final_text(self):
+                    # The previous generation completes while the final ASR packet arrives.
+                    processing.is_active = False
+                    processing.revision_enabled = False
+                    processing.active_audio = None
+                    playing.append(True)
+                    return "我心情真的很不好。"
+
+            handler = context.handler
+            handler._is_ai_speaking = lambda *_: bool(playing)
+            handler._interrupt_active_processing = coordinator.interrupt_active
+            handler._get_active_processing_audio = coordinator.active_audio_copy
+            handler._judge_interrupt_intent = mock.AsyncMock(return_value="complete")
+            handler._quick_asr = mock.AsyncMock(side_effect=AssertionError("duplicate ASR"))
+            frame = LiveAudioFrameContext(
+                audio=np.ones(512), complete_audio=np.ones(53760), realtime_turn=RealtimeTurn(),
+            )
+            await handler._handle_complete_audio(frame)
+
+            self.assertEqual(stops, [True])
+            self.assertFalse(playing)
+            self.assertEqual(len(context.submissions), 1)
+            metadata = context.submissions[0][1]["extra_meta"]
+            self.assertEqual(metadata["final_asr_result"]["text"], "我心情真的很不好。")
+            self.assertIs(metadata["realtime_turn"], frame.realtime_turn)
+            handler._quick_asr.assert_not_awaited()
+
+        asyncio.run(scenario())
+
+    def test_partial_streaming_result_uses_one_full_asr_and_forwards_it(self):
+        async def scenario():
+            context = self._build_handler(started=True)
+            handler = context.handler
+            frame = LiveAudioFrameContext(
+                audio=np.ones(512), complete_audio=np.ones(16000),
+                realtime_turn=SimpleNamespace(
+                    has_final=False, stream_error=None,
+                    final_text=mock.AsyncMock(return_value="尚未确认的片段"),
+                ),
+            )
+            handler._quick_asr = mock.AsyncMock(return_value="完整表达")
+            self.assertEqual(await handler._recognize_complete_audio(frame), "完整表达")
+            await handler._handle_complete_audio(frame)
+            handler._quick_asr.assert_awaited_once()
+            metadata = context.submissions[0][1]["extra_meta"]
+            self.assertEqual(metadata["final_asr_result"]["text"], "完整表达")
+            self.assertEqual(metadata["final_asr_result"]["source"], "fallback_final")
+
+        asyncio.run(scenario())
+
+    def test_merged_revision_does_not_reuse_only_the_new_fragment_transcript(self):
+        async def scenario():
+            context = self._build_handler(started=True)
+            old_audio = np.ones(8000, dtype=np.float32)
+            new_audio = np.full(8000, 2, dtype=np.float32)
+            handler = context.handler
+            handler._get_active_processing_audio = lambda: old_audio
+            handler._interrupt_active_processing = mock.AsyncMock()
+            frame = LiveAudioFrameContext(
+                audio=np.ones(512), complete_audio=new_audio,
+                final_recognition={"text": "补充内容", "source": "streaming_final"},
+            )
+            await handler._replace_active_processing(frame)
+            audio, kwargs = context.submissions[0]
+            np.testing.assert_array_equal(audio, np.concatenate([old_audio, new_audio]))
+            self.assertNotIn("final_asr_result", kwargs.get("extra_meta", {}))
+
+        asyncio.run(scenario())
+
+    def test_stalled_final_asr_closes_stream_and_falls_back_once(self):
+        async def scenario():
+            context = self._build_handler(started=True)
+            closed = asyncio.Event()
+
+            class StalledStream:
+                async def start(self):
+                    pass
+
+                async def finish(self):
+                    await asyncio.Event().wait()
+
+                async def aclose(self):
+                    closed.set()
+
+            companion = RealtimeCompanion(
+                context.connection, session=context.session,
+                patient_memory_service=None, stream_tts_audio=mock.AsyncMock(),
+                config=RealtimeCompanionConfig(enabled=True),
+                stream_factory=lambda **_: StalledStream(), logger=lambda _: None,
+            )
+            turn = RealtimeTurn(companion)
+            turn.start()
+            turn.finish()
+            frame = LiveAudioFrameContext(
+                audio=np.ones(512), complete_audio=np.ones(16000), realtime_turn=turn,
+            )
+            handler = context.handler
+            handler._quick_asr = mock.AsyncMock(return_value="完整表达")
+            try:
+                text = await asyncio.wait_for(handler._recognize_complete_audio(frame), 2.0)
+                self.assertEqual(text, "完整表达")
+                self.assertTrue(closed.is_set())
+                self.assertFalse(turn.has_final)
+                await handler._handle_complete_audio(frame)
+                handler._quick_asr.assert_awaited_once()
+                self.assertEqual(len(context.submissions), 1)
+            finally:
+                await turn.aclose()
+
+        asyncio.run(scenario())
+
+    def test_late_speaker_check_cannot_interrupt_a_new_generation(self):
+        async def scenario():
+            context = self._build_handler(started=True)
+            handler = context.handler
+            handler._is_ai_speaking = lambda *_: True
+            handler._stop_playback = mock.AsyncMock()
+            handler._interrupt_active_processing = mock.AsyncMock()
+            handler._quick_asr = mock.AsyncMock(return_value="过期的输入")
+            handler._judge_interrupt_intent = mock.AsyncMock(return_value="complete")
+
+            async def verify(_audio):
+                context.session.processing.generation += 1
+                return True
+
+            handler._verify_complete_speaker = verify
+            frame = LiveAudioFrameContext(audio=np.ones(512), complete_audio=np.ones(16000))
+            self.assertTrue(await handler._handle_ai_speaking_utterance(frame))
+            handler._stop_playback.assert_not_awaited()
+            handler._interrupt_active_processing.assert_not_awaited()
+            handler._judge_interrupt_intent.assert_not_awaited()
+
+        asyncio.run(scenario())
+
+    def test_late_revision_cannot_interrupt_a_new_generation(self):
+        async def scenario():
+            context = self._build_handler(started=True)
+            processing = context.session.processing
+            processing.is_active = processing.revision_enabled = True
+
+            async def recognize(_audio):
+                processing.generation += 1
+                return "过期的输入"
+
+            handler = context.handler
+            handler._quick_asr = recognize
+            handler._judge_interrupt_intent = mock.AsyncMock(return_value="complete")
+            handler._interrupt_active_processing = mock.AsyncMock()
+            frame = LiveAudioFrameContext(audio=np.ones(512), complete_audio=np.ones(16000))
+            await handler._handle_complete_audio(frame)
+            self.assertEqual(context.submissions, [])
+            handler._interrupt_active_processing.assert_not_awaited()
+
+        asyncio.run(scenario())
+
     def test_audio_before_session_start_is_safely_discarded(self):
         async def scenario():
             context = self._build_handler(started=False)
@@ -3573,7 +4381,7 @@ class LiveAudioInputHandlerTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_full_duplex_complete_interrupt_stops_playback_and_resets(self):
+    def test_full_duplex_stops_before_asr_and_preserves_utterance(self):
         async def scenario():
             class InterruptVAD(_FakeLocalVADBuffer):
                 @staticmethod
@@ -3594,6 +4402,8 @@ class LiveAudioInputHandlerTests(unittest.TestCase):
             vad_buffer = InterruptVAD()
             reset_calls = []
             stop_calls = []
+            submissions = []
+            playing = [True]
 
             def reset_interrupt_capture(**kwargs):
                 reset_calls.append(kwargs)
@@ -3604,13 +4414,17 @@ class LiveAudioInputHandlerTests(unittest.TestCase):
                     vad_buffer.reset()
 
             async def quick_asr(_audio):
-                return "我想补充"
+                raise AssertionError("ASR must not block playback interruption")
 
             async def judge_interrupt_intent(_text):
-                return "complete"
+                raise AssertionError("Intent must not block playback interruption")
 
             async def stop_playback():
                 stop_calls.append(True)
+                playing.clear()
+
+            async def submit_speech(audio, **_kwargs):
+                submissions.append(audio.copy())
 
             handler = LiveAudioInputHandler(
                 connection,
@@ -3620,7 +4434,7 @@ class LiveAudioInputHandlerTests(unittest.TestCase):
                 speaker=_FakeSoulXSpeaker(),
                 answer_completion=AnswerCompletionState(),
                 history_store=_FakeHistoryStore(),
-                is_ai_speaking=lambda *_args: True,
+                is_ai_speaking=lambda *_args: bool(playing),
                 reset_interrupt_capture=reset_interrupt_capture,
                 remember_interrupt_judgement=lambda *_args: None,
                 reuse_interrupt_judgement=lambda _audio: (None, None),
@@ -3632,7 +4446,7 @@ class LiveAudioInputHandlerTests(unittest.TestCase):
                 stop_playback=stop_playback,
                 get_active_processing_audio=lambda: None,
                 notify_voice_input_feedback=lambda *_args, **_kwargs: None,
-                submit_speech=lambda *_args, **_kwargs: None,
+                submit_speech=submit_speech,
                 notify_answer_completion=lambda *_args, **_kwargs: None,
                 arm_answer_completion_window=lambda: None,
                 quick_asr=quick_asr,
@@ -3665,9 +4479,20 @@ class LiveAudioInputHandlerTests(unittest.TestCase):
             self.assertEqual(stop_calls, [True])
             self.assertEqual(
                 reset_calls,
-                [{"reset_waiting": True, "reset_vad": True}],
+                [{"reset_waiting": True}],
             )
             self.assertFalse(session.runtime.waiting_for_complete)
+            self.assertEqual(vad_buffer.reset_count, 0)
+            self.assertEqual(submissions, [])
+
+            complete_audio = np.arange(16000, dtype=np.float32)
+            vad_buffer.complete_audio = complete_audio
+            await handler.handle_message({
+                "type": "audio", "_audio_float": np.zeros(512, dtype=np.float32),
+            })
+            self.assertEqual(stop_calls, [True])
+            self.assertEqual(len(submissions), 1)
+            np.testing.assert_array_equal(submissions[0], complete_audio)
 
         asyncio.run(scenario())
 

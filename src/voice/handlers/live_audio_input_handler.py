@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable
 from typing import Any
@@ -87,6 +88,7 @@ class LiveAudioInputHandler:
         self._log = logger
         self._realtime_companion = realtime_companion
         self._ensure_session_on_speech = ensure_session_on_speech
+        self._interrupt_started_at = 0.0
 
     async def handle_message(self, message: dict) -> bool:
         """Orchestrate one frame without embedding the state machines inline."""
@@ -119,10 +121,7 @@ class LiveAudioInputHandler:
         )
 
     async def _route_soulx_audio(self, audio) -> bool:
-        realtime_enabled = bool(
-            getattr(getattr(self._realtime_companion, "config", None), "enabled", False)
-        )
-        return not realtime_enabled and await self.soulx_audio_handler.handle_audio(audio)
+        return await self.soulx_audio_handler.handle_audio(audio)
 
     async def _start_pending_session_on_speech(
         self,
@@ -198,7 +197,6 @@ class LiveAudioInputHandler:
         if self._should_block_during_processing(frame):
             return True
 
-        await self._report_vad_drop(frame)
         self._track_early_listening(frame)
         if self._reject_short_early_capture(frame):
             return True
@@ -282,6 +280,7 @@ class LiveAudioInputHandler:
             "刚才这句太短或像噪音，系统没有处理。请靠近麦克风后再完整说一遍。",
             status_text="语音太短或不清晰，请再说一遍",
             duration_s=frame.drop_duration_s,
+            source="vad_drop",
         )
 
     def _track_early_listening(
@@ -376,6 +375,9 @@ class LiveAudioInputHandler:
         )
         if not should_monitor:
             return False
+        if getattr(self._realtime_companion, "backchannel_playing", False):
+            self._reset_interrupt_capture(reset_waiting=True)
+            return False
 
         speech_probability = self.vad_buffer.has_speech(frame.audio)
         frame.current_time = time.time()
@@ -402,6 +404,8 @@ class LiveAudioInputHandler:
         chunk_rms: float,
     ) -> bool:
         runtime = self.session.runtime
+        if not runtime.interrupt_audio_buffer:
+            self._interrupt_started_at = frame.current_time
         runtime.interrupt_audio_buffer.append(frame.audio)
         runtime.interrupt_speech_run += 1
         runtime.last_speech_time = frame.current_time
@@ -415,6 +419,37 @@ class LiveAudioInputHandler:
             sum(len(audio) for audio in runtime.interrupt_audio_buffer)
             / 16000
         )
+        stop_duration = self.config.interrupt_stop_duration
+        if self.speaker.enabled:
+            stop_duration = max(stop_duration, self.config.interrupt_min_duration)
+        if self._is_ai_speaking() and duration >= stop_duration:
+            generation = self.session.processing.generation
+            session_id = self.session.session_id
+            full_audio = np.concatenate(runtime.interrupt_audio_buffer)
+            if not await self._verify_interrupt_speaker(full_audio):
+                self._reset_interrupt_capture(reset_waiting=True)
+                return False
+            if (
+                self.session.processing.generation != generation
+                or self.session.session_id != session_id
+            ):
+                self._reset_interrupt_capture(reset_waiting=True)
+                return False
+            self._log(
+                f"[全双工] 🛑 持续人声先停播: speech_ms={duration * 1000:.0f}, "
+                f"prob={speech_probability:.2f}, rms={chunk_rms:.4f}, "
+                f"server_voice_at_ms={self._interrupt_started_at * 1000:.1f}, "
+                f"server_stop_at_ms={time.time() * 1000:.1f}"
+            )
+            if self.session.processing.is_active:
+                await self._interrupt_active_processing("检测到持续人声")
+            else:
+                await self._stop_playback()
+            # Keep the full VAD utterance (including its onset). ASR and intent
+            # are resolved after the patient finishes, outside the stop path.
+            self._reset_interrupt_capture(reset_waiting=True)
+            return False
+
         should_judge = (
             duration >= self.config.interrupt_min_duration
             and not runtime.waiting_for_complete
@@ -434,14 +469,9 @@ class LiveAudioInputHandler:
 
         text = await self._quick_asr(full_audio)
         if not text or len(text.strip()) < 2:
+            # 打断判定是后台行为，用户并未要求系统响应，弹提示反而是噪音。
+            # 只记日志，不通知前端。
             self._log("[全双工] ⚠️ 识别失败或文本过短，可能是噪音，忽略")
-            await self._notify_voice_input_feedback(
-                "speech_too_short",
-                "刚才这句太短或不够清晰，没有触发打断。您可以再完整说一遍。",
-                status_text="打断语音太短，请再完整说一遍",
-                duration_s=duration,
-                source="interrupt_buffer",
-            )
             self._reset_interrupt_capture(reset_waiting=True)
             return True
 
@@ -645,9 +675,53 @@ class LiveAudioInputHandler:
         await self._send_vad_end(frame)
         self._reset_interrupt_capture(reset_waiting=True)
         kwargs = {"source": "语音输入"}
-        if frame.realtime_turn is not None:
-            kwargs["extra_meta"] = {"realtime_turn": frame.realtime_turn}
+        metadata = self._recognition_metadata(frame)
+        if metadata:
+            kwargs["extra_meta"] = metadata
         await self._submit_speech(frame.complete_audio, **kwargs)
+
+    async def _recognize_complete_audio(self, frame: LiveAudioFrameContext) -> str:
+        """Reuse only a verified final result for this complete utterance."""
+        if frame.final_recognition is not None:
+            return frame.final_recognition["text"]
+        text = ""
+        source = "fallback_final"
+        turn = frame.realtime_turn
+        if turn is not None:
+            try:
+                candidate = await asyncio.wait_for(turn.final_text(), timeout=1.0)
+                if (
+                    candidate
+                    and getattr(turn, "has_final", False)
+                    and getattr(turn, "stream_error", None) is None
+                ):
+                    text = str(candidate).strip()
+                    source = "streaming_final"
+            except Exception as exc:
+                self._log(
+                    f"[ASR] 完整语音流式结果不可用，回退整段识别: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+        if not text:
+            text = str(await self._quick_asr(frame.complete_audio) or "").strip()
+        frame.final_recognition = {
+            "text": text,
+            "emotion": "neutral",
+            "language": "zh",
+            "event": "speech",
+            "source": source,
+        }
+        return text
+
+    @staticmethod
+    def _recognition_metadata(frame: LiveAudioFrameContext) -> dict:
+        metadata = {}
+        if frame.realtime_turn is not None:
+            metadata["realtime_turn"] = frame.realtime_turn
+        if frame.final_recognition is not None:
+            metadata["final_asr_result"] = dict(frame.final_recognition)
+            metadata["final_asr_audio_samples"] = len(frame.complete_audio)
+        return metadata
 
     async def _complete_waiting_utterance(
         self,
@@ -683,13 +757,6 @@ class LiveAudioInputHandler:
         if not text or len(text.strip()) < 2:
             self._reset_interrupt_capture(reset_waiting=True)
             self._log("[VAD] ⚠️ 合并音频快速识别为空或过短，放弃处理")
-            await self._notify_voice_input_feedback(
-                "speech_too_short",
-                "刚才这句太短或不够清晰，系统没有处理。您可以再完整说一遍。",
-                status_text="语音太短或不清晰，请再说一遍",
-                duration_s=len(combined_audio) / 16000.0,
-                source="interrupt_complete",
-            )
             return True
         if intent != "complete":
             self._reset_interrupt_capture(reset_waiting=True)
@@ -720,11 +787,13 @@ class LiveAudioInputHandler:
         ):
             return False
 
+        generation = processing.generation
+        session_id = self.session.session_id
         text, intent = self._reuse_interrupt_judgement(
             frame.complete_audio
         )
         if intent is None:
-            text = await self._quick_asr(frame.complete_audio)
+            text = await self._recognize_complete_audio(frame)
             if text and len(text.strip()) >= 2:
                 intent = await self._judge_interrupt_intent(text)
                 self._remember_interrupt_judgement(
@@ -733,18 +802,18 @@ class LiveAudioInputHandler:
                     intent,
                 )
 
+        if (
+            processing.generation != generation
+            or self.session.session_id != session_id
+        ):
+            self._log("[全双工] 跳过已被后续操作取代的语音判定")
+            return True
+
         if not text or len(text.strip()) < 2:
             self._log(
                 "[全双工] ⚠️ 处理阶段语音过短或识别为空，忽略这次覆盖"
             )
             self._reset_interrupt_capture(reset_waiting=True)
-            await self._notify_voice_input_feedback(
-                "speech_too_short",
-                "刚才这句太短或不够清晰，系统没有切换到新版回答。您可以再完整说一遍。",
-                status_text="语音太短或不清晰，请再说一遍",
-                duration_s=len(frame.complete_audio) / 16000.0,
-                source="processing_complete",
-            )
             return True
         if intent == "backchannel":
             self._log("[全双工] ⏭️ 处理阶段识别到应答词，保持当前处理")
@@ -799,11 +868,14 @@ class LiveAudioInputHandler:
             dtype=np.float32,
         ).reshape(-1).copy()
         source = "全双工处理阶段语音"
+        metadata = self._recognition_metadata(frame)
         if base_audio is not None and len(base_audio) > 0:
             revised_audio = np.concatenate(
                 [base_audio, revised_audio]
             ).astype(np.float32, copy=False)
             source = f"{processing.active_source or '处理中语音'}+补充"
+            # The new utterance's final ASR does not cover the merged audio.
+            metadata = {}
             self._log(
                 "[全双工] 🔗 将处理中的原回答与补充语音合并后重算，"
                 f"总时长: {len(revised_audio) / 16000:.2f}s"
@@ -813,7 +885,10 @@ class LiveAudioInputHandler:
         )
         await self._send_vad_end(frame)
         self._reset_interrupt_capture(reset_waiting=True)
-        await self._submit_speech(revised_audio, source=source)
+        kwargs = {"source": source}
+        if metadata:
+            kwargs["extra_meta"] = metadata
+        await self._submit_speech(revised_audio, **kwargs)
 
     async def _capture_answer_completion(
         self,
@@ -851,38 +926,38 @@ class LiveAudioInputHandler:
                 f"{self.config.interrupt_min_complete_audio_s:.2f}s)，"
                 "跳过（避免误打断）"
             )
-            await self._notify_voice_input_feedback(
-                "speech_too_short",
-                "刚才这句太短，没有触发打断。您可以等提示结束后再完整说一遍。",
-                status_text="打断语音太短，请再完整说一遍",
-                duration_s=duration,
-                source="interrupt_complete",
-            )
             return True
         self._log(
             "[VAD] ️️ 检测到完整语音"
             f"（AI正在说话，{duration:.1f}s），用户主动打断或回答"
         )
+        generation = self.session.processing.generation
+        session_id = self.session.session_id
         if not await self._verify_complete_speaker(frame.complete_audio):
             return True
 
-        text = await self._quick_asr(frame.complete_audio)
+        text = await self._recognize_complete_audio(frame)
+        if (
+            self.session.processing.generation != generation
+            or self.session.session_id != session_id
+        ):
+            self._log("[全双工] 跳过已被后续操作取代的播放打断识别")
+            return True
         if not text or len(text.strip()) < 2:
             self._reset_interrupt_capture()
             self._log(
                 "[VAD] ⚠️ AI说话期间完整语音快速识别为空或过短，"
                 "继续播放"
             )
-            await self._notify_voice_input_feedback(
-                "speech_too_short",
-                "刚才这句太短或不够清晰，没有触发打断。您可以再完整说一遍。",
-                status_text="打断语音太短，请再完整说一遍",
-                duration_s=duration,
-                source="interrupt_complete",
-            )
             return True
 
         intent = await self._judge_interrupt_intent(text)
+        if (
+            self.session.processing.generation != generation
+            or self.session.session_id != session_id
+        ):
+            self._log("[全双工] 跳过已被后续操作取代的播放打断判定")
+            return True
         self._remember_interrupt_judgement(
             frame.complete_audio,
             text,

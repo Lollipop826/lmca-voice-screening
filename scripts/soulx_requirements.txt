@@ -1,0 +1,15 @@
+# Install only in SoulX's separate venv; reuse the existing Torch/CUDA runtime.
+transformers==4.52.1
+peft==0.16.0
+pytorch-lightning==2.5.2
+torchmetrics==1.8.0
+accelerate==1.9.0
+funasr==1.2.6
+datasets==3.1.0
+huggingface-hub==0.34.4
+WeTextProcessing==1.0.3
+pynini==2.1.5
+addict==2.4.0
+simplejson==3.20.2
+sortedcontainers==2.4.0
+zhon==2.1.1

@@ -35,6 +35,7 @@ class VoiceInterruptionController:
         extract_latest_assistant_utterance: Callable[[list], str],
         normalize_interrupt_text: Callable[[str], str],
         soulx_session_id_factory: Callable[[], str],
+        cancel_render_jobs: Callable[..., Any] | None = None,
         now_factory: Callable[[], float] = time.time,
         playback_stop_delay_s: float = 0.08,
         logger=print,
@@ -52,6 +53,7 @@ class VoiceInterruptionController:
         )
         self._normalize_interrupt_text = normalize_interrupt_text
         self._soulx_session_id_factory = soulx_session_id_factory
+        self._cancel_render_jobs = cancel_render_jobs
         self._now = now_factory
         self.playback_stop_delay_s = float(playback_stop_delay_s)
         self._log = logger
@@ -164,10 +166,38 @@ class VoiceInterruptionController:
         return text, intent
 
     async def stop_playback(self) -> None:
+        stop_requested_at_ms = round(self._now() * 1000, 1)
         runtime = self.session.runtime
+        processing = self.session.processing
+        if self._cancel_render_jobs is not None:
+            self._cancel_render_jobs(session=self.session)
         runtime.stop_generate = True
         runtime.ai_streaming_tts = False
-        await self.connection.send_json({"type": "stop_tts"})
-        await self.connection.send_json({"type": "interrupt"})
-        await asyncio.sleep(self.playback_stop_delay_s)
         runtime.ai_speaking_until = 0.0
+        processing.generation += 1
+        turn_id = str(
+            processing.active_turn_id
+            or f"system-{self.session.session_id or 'session'}"
+        )
+        processing.active_playback_id = (
+            f"playback-{turn_id}-{processing.generation}"
+        )
+        output_identity = {
+            "session_id": self.session.session_id,
+            "turn_id": turn_id,
+            "generation": processing.generation,
+            "playback_id": processing.active_playback_id,
+            "server_stop_at_ms": stop_requested_at_ms,
+        }
+        if callable(getattr(self.connection, "current_output_identity", None)):
+            await self.connection.send_json({"type": "stop_tts", **output_identity})
+            await self.connection.send_json({"type": "interrupt", **output_identity})
+        else:
+            await self.connection.send_json({"type": "stop_tts"})
+            await self.connection.send_json({"type": "interrupt"})
+        self._log(
+            f"[全双工停播] server_stop_at_ms={stop_requested_at_ms}, "
+            f"server_sent_at_ms={self._now() * 1000:.1f}, "
+            f"generation={processing.generation}"
+        )
+        await asyncio.sleep(self.playback_stop_delay_s)

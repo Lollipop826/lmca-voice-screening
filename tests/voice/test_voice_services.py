@@ -1105,6 +1105,33 @@ class PatientMemoryServiceTests(unittest.TestCase):
         memory.get_relevant_evidence.assert_not_called()
         memory.capture_turn.assert_not_called()
 
+    def test_session_can_freeze_writes_without_disabling_reads(self):
+        session = self._session()
+        session.long_term_memory_writes_enabled = False
+        memory = Mock()
+        memory.get_snapshot.return_value = {"facts": [{"value": "喜欢京剧"}]}
+        memory.get_relevant_evidence.return_value = "喜欢京剧"
+        service = PatientMemoryService(
+            get_patient=lambda patient_id: {"patient_id": patient_id},
+            create_patient=Mock(),
+            update_patient_profile=Mock(),
+            link_session_patient=Mock(),
+            long_term_memory=memory,
+            logger=Mock(),
+        )
+
+        context = service.resolve_for_session(session, "pt-1")
+
+        self.assertTrue(context.has_history)
+        self.assertIn("喜欢京剧", service.get_turn_context(session, "最近听什么"))
+        self.assertFalse(service.capture_turn(session, "用户", "助手"))
+        self.assertFalse(service.update_turn_emotion(session, "turn-1", {"calm": 1.0}))
+        self.assertFalse(service.update_turn_status(session, "turn-1", turn_state="RESPONDED"))
+        self.assertFalse(service.flush_session(session))
+        self.assertFalse(service.consolidate(session))
+        memory.get_relevant_evidence.assert_called_once()
+        memory.capture_turn.assert_not_called()
+
     def test_missing_requested_patient_is_created_and_assigned_to_owner(self):
         session = self._session()
         create_patient = Mock(return_value={"patient_id": "pt-new"})

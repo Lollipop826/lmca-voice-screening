@@ -16,6 +16,8 @@ import numpy as np
 import onnxruntime as ort
 import soundfile as sf
 
+from src.voice.interrupt_intent import is_backchannel_text
+
 
 def clean_for_tts(text: str) -> str:
     """Remove common Markdown markers before speech synthesis."""
@@ -299,11 +301,15 @@ class VADBuffer:
         self._weak_speech_run = 0
         self.last_drop_reason = None
         self.last_drop_duration_s = None
+        self._last_frame_audio = None
+        self._last_frame_probability = 0.0
 
     def add_chunk(self, audio_chunk):
         chunk_size = 512
         self.last_drop_reason = None
         self.last_drop_duration_s = None
+        self._last_frame_audio = audio_chunk
+        self._last_frame_probability = 0.0
         for offset in range(0, len(audio_chunk), chunk_size):
             chunk = audio_chunk[offset : offset + chunk_size]
             if len(chunk) < chunk_size:
@@ -314,6 +320,13 @@ class VADBuffer:
                 continue
 
             probability = self.vad_model(chunk, self.sample_rate)
+            # Reuse continuous inference for barge-in; resetting Silero for
+            # every 32 ms frame makes sustained speech look like isolated noise.
+            # For batched input require every full chunk to pass the gate.
+            self._last_frame_probability = (
+                probability if offset == 0
+                else min(self._last_frame_probability, probability)
+            )
             chunk_rms = self._chunk_rms(chunk)
             strong_speech = probability >= self.start_threshold
             weak_speech = (
@@ -385,12 +398,10 @@ class VADBuffer:
         return result
 
     def has_speech(self, audio_chunk) -> float:
-        if len(audio_chunk) < 512:
+        """Read the score from add_chunk without advancing/resetting Silero."""
+        if len(audio_chunk) < 512 or audio_chunk is not self._last_frame_audio:
             return 0.0
-        return self.vad_model.predict_stateless(
-            audio_chunk[:512],
-            self.sample_rate,
-        )
+        return self._last_frame_probability
 
     def reset(self) -> None:
         self.buffer = []
@@ -399,6 +410,8 @@ class VADBuffer:
         self._speech_chunk_count = 0
         self._pre_roll_buffer.clear()
         self._weak_speech_run = 0
+        self._last_frame_audio = None
+        self._last_frame_probability = 0.0
         self.vad_model.reset_states()
 
     @staticmethod
@@ -487,6 +500,38 @@ class VoiceModelRuntime:
             self._log(
                 "[初始化] ⚠️ ArkTTS 预热失败（不影响启动）: "
                 f"{exc}"
+            )
+
+    async def prewarm_llm(self) -> None:
+        """Create the default companion LLM and complete one tiny probe call."""
+        if self.agent is None:
+            return
+
+        def probe() -> None:
+            agent = self.agent
+            get_agent = getattr(agent, "_get_agent", None)
+            if callable(get_agent):
+                agent = get_agent()
+            get_llm = getattr(agent, "_get_llm", None)
+            llm = get_llm() if callable(get_llm) else getattr(agent, "llm", None)
+            invoke = getattr(llm, "invoke", None)
+            if not callable(invoke):
+                return
+            invoke([{"role": "user", "content": "只回复一个字：好"}])
+
+        self._log("[初始化] 🔥 预热陪伴 Agent/LLM...")
+        try:
+            await asyncio.wait_for(
+                asyncio.to_thread(probe),
+                timeout=max(1.0, float(os.getenv("LLM_PREWARM_TIMEOUT_S", "20"))),
+            )
+            self._log("[初始化] ✅ 陪伴 Agent/LLM 预热完成")
+        except asyncio.TimeoutError:
+            self._log("[初始化] ⚠️ 陪伴 Agent/LLM 预热超时（不影响启动）")
+        except Exception as exc:
+            self._log(
+                "[初始化] ⚠️ 陪伴 Agent/LLM 预热失败（不影响启动）: "
+                f"{type(exc).__name__}"
             )
 
     def _initialize_asr(self) -> None:
@@ -745,18 +790,7 @@ class VoiceRecognitionService:
 
     async def judge_interrupt_intent(self, text: str) -> str:
         normalized = self.normalize_interrupt_text(text)
-        if normalized in {
-            "嗯",
-            "啊",
-            "哦",
-            "对",
-            "是的",
-            "好的",
-            "嗯嗯",
-            "啊啊",
-            "好",
-            "嗯哼",
-        }:
+        if is_backchannel_text(normalized):
             self._log(f"[语义判断] 应答词 text_chars={len(text)}")
             return "backchannel"
         corrections = {

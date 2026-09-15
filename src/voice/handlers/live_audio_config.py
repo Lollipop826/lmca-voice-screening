@@ -15,3 +15,4 @@ class LiveAudioConfig:
     interrupt_min_consecutive_chunks: int
     interrupt_complete_silence_s: float
     interrupt_min_complete_audio_s: float
+    interrupt_stop_duration: float = 0.20

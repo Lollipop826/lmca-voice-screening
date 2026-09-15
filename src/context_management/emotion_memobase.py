@@ -6,6 +6,7 @@ kept as a recoverable mirror, so its failure never breaks patient dialogue.
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -22,6 +23,13 @@ from urllib.parse import urlparse
 
 from src.db import database as _database
 from src.voice_modes import WELLBEING, normalize_session_mode
+
+from .retrieval_cache import (
+    RetrievalBusyError,
+    RetrievalCache,
+    RetrievalHttpClient,
+    RetrievalUnavailableError,
+)
 
 
 # Keep HTTP/API and memory implementations on one conflict type.
@@ -90,10 +98,17 @@ _LONG_TERM_EVENT_TOKEN_BUDGET = int(
 )
 _AUTHORITATIVE_CARD_TOKEN_BUDGET = 900
 _LOCAL_FALLBACK_ITEM_LIMIT = 3
+# Marks context produced by the query-independent local fallback rather than by
+# semantic retrieval.  Callers that report retrieval quality must be able to
+# tell the two apart, so the marker is part of this module's public contract.
+LOCAL_ACTIVE_MEMORY_MARKER = "[local_active_memory]"
 _SYNC_LEASE_SECONDS = 60
 _SYNC_RETRY_MAX_SECONDS = 300
 _REFLECTION_LEASE_SECONDS = 120
 _REFLECTION_RETRY_SECONDS = 60
+_REFLECTION_MAX_ATTEMPTS = 3
+_MEMORY_WORKER_INTERVAL = 1.0
+_VERIFICATION_PROMPT_VERSION = "v3"
 _CONSOLIDATABLE_FIELDS = {
     "facts", "preferences", "events", "comfort_strategies", "narrative"
 }
@@ -101,6 +116,8 @@ _REFLECTION_CATEGORIES = {
     "facts", "preferences", "events", "emotional_triggers", "boundaries",
     "comfort_strategies",
 }
+
+
 _REFLECTION_OPERATIONS = {"ADD", "SUPERSEDE", "CANDIDATE", "NOOP", "BLOCK"}
 _TEMPORARY_SCOPE_MARKERS = (
     "现在", "今天", "今晚", "这次", "暂时", "先别", "这几天", "这两天",
@@ -369,33 +386,6 @@ def _classify_emotion(
     return _normalise_emotion(_keyword_emotion(text))
 
 
-def _extract_memory_items(text: str) -> dict[str, list[str]]:
-    """Extract only explicit, low-risk facts for the local fallback."""
-    import re
-
-    facts: list[str] = []
-    preferences: list[str] = []
-    events: list[str] = []
-    for pattern in (
-        r"(?:我叫|我的名字是|名字叫)\s*([^，。！？；\s]{1,20})",
-        r"(?:我今年|今年我)\s*(\d{1,3})\s*岁",
-    ):
-        for match in re.finditer(pattern, text):
-            facts.append(match.group(0).strip())
-    for match in re.finditer(
-        r"(?:我喜欢|我爱|平时喜欢|平常喜欢)\s*([^。！？；\n]{1,80})",
-        text,
-    ):
-        preferences.append(match.group(0).strip())
-    if any(token in text for token in ("今天", "昨天", "最近", "上周", "孙子", "孙女", "儿子", "女儿")):
-        events.append(_clip(text, 240))
-    return {
-        "facts": list(dict.fromkeys(facts)),
-        "preferences": list(dict.fromkeys(preferences)),
-        "events": list(dict.fromkeys(events)),
-    }
-
-
 def _default_snapshot(patient_id: str, profile: Optional[Mapping[str, Any]] = None) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -410,6 +400,7 @@ def _default_snapshot(patient_id: str, profile: Optional[Mapping[str, Any]] = No
         "mmse_history": [],
         "comfort_strategies": [],
         "narrative": "",
+        "_narrative_manual": False,
         "updated_at": None,
     }
 
@@ -424,9 +415,10 @@ def _normalise_snapshot(
         data.update(_json_copy(dict(raw)))
     if not isinstance(data.get("profile"), Mapping):
         data["profile"] = {}
-    merged_profile = dict(profile or {})
-    merged_profile.update(data["profile"])
-    data["profile"] = merged_profile
+    if profile is not None:
+        # Registered patients use the patients table as the profile authority;
+        # snapshot fields are projections and must not resurrect deleted data.
+        data["profile"] = dict(profile)
     for field in _LIST_FIELDS:
         if not isinstance(data.get(field), list):
             data[field] = []
@@ -607,8 +599,10 @@ class EmotionMemobase:
         memobase_client: Any = None,
         emotion_classifier: Optional[Callable[[str], Any]] = None,
         session_reflector: Optional[Callable[[str], Any]] = None,
+        session_verifier: Optional[Callable[[str], Any]] = None,
         memobase: Any = None,
         logger: Callable[[str], Any] = print,
+        audit_event: Optional[Callable[..., Any]] = None,
     ) -> None:
         configured_path = db_path or storage_path or _database.get_db_path()
         if str(configured_path) == ":memory:":
@@ -633,6 +627,8 @@ class EmotionMemobase:
                 pass
         self._emotion_classifier = emotion_classifier
         self._session_reflector = session_reflector
+        self._session_verifier = session_verifier
+        self._auto_verify_reflections = session_verifier is not None or session_reflector is None
         self._memobase = memobase_client if memobase_client is not None else memobase
         self._memobase_auto = self._memobase is None and bool(
             os.getenv("MEMOBASE_PROJECT_URL") and os.getenv("MEMOBASE_API_KEY")
@@ -640,8 +636,34 @@ class EmotionMemobase:
         self._memobase_retry_at = 0.0
         self._memobase_executor: Optional[ThreadPoolExecutor] = None
         self._memobase_lock = threading.Lock()
+        self._retrieval_http_timeout_s = max(
+            0.05, float(os.getenv("MEMORY_RETRIEVAL_HTTP_TIMEOUT_S", "1.5"))
+        )
+        self._retrieval_cache = RetrievalCache(
+            ttl_s=float(os.getenv("MEMORY_RETRIEVAL_CACHE_TTL_S", "60")),
+            max_entries=int(os.getenv("MEMORY_RETRIEVAL_CACHE_MAX_ENTRIES", "128")),
+            max_inflight=int(os.getenv("MEMORY_RETRIEVAL_MAX_INFLIGHT", "2")),
+            wait_timeout_s=float(os.getenv("MEMORY_RETRIEVAL_TIMEOUT_S", "0.25")),
+        )
+        self._memory_worker_stop = threading.Event()
+        self._memory_worker_wakeup = threading.Event()
+        self._memory_worker_thread: Optional[threading.Thread] = None
         self._log = logger
+        self._audit_event = audit_event
         self._ensure_schema()
+
+    def _emit_audit(self, patient_id: str | None, action: str, outcome: str) -> None:
+        callback = self._audit_event
+        if not callable(callback):
+            return
+        try:
+            callback(
+                patient_id=str(patient_id or "").strip() or None,
+                action=str(action),
+                outcome=str(outcome),
+            )
+        except Exception:
+            self._log(f"[EmotionMemory] audit event failed: {action}")
 
     def _load_memobase(self) -> Any:
         project_url = os.getenv("MEMOBASE_PROJECT_URL")
@@ -661,12 +683,13 @@ class EmotionMemobase:
             client._client = httpx.Client(
                 base_url=client.base_url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=30.0,
+                timeout=self._retrieval_http_timeout_s,
                 trust_env=False,
             )
             if not client.ping():
                 client.client.close()
                 return None
+            client.client.timeout = httpx.Timeout(30.0)
             return client
         except Exception as exc:
             close = getattr(getattr(client, "client", None), "close", None)
@@ -779,6 +802,11 @@ class EmotionMemobase:
                     attempt_count INTEGER NOT NULL DEFAULT 0,
                     next_retry_at TEXT,
                     last_error TEXT,
+                    error_code TEXT,
+                    lease_until TEXT,
+                    lease_token TEXT,
+                    payload_json TEXT,
+                    dead_letter_at TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -837,6 +865,14 @@ class EmotionMemobase:
             )
             self._ensure_column(conn, _SNAPSHOT_TABLE, "updated_by", "TEXT NOT NULL DEFAULT 'system'")
             for column, definition in (
+                ("error_code", "TEXT"),
+                ("lease_until", "TEXT"),
+                ("lease_token", "TEXT"),
+                ("payload_json", "TEXT"),
+                ("dead_letter_at", "TEXT"),
+            ):
+                self._ensure_column(conn, _MIRROR_OP_TABLE, column, definition)
+            for column, definition in (
                 ("turn_id", "TEXT NOT NULL DEFAULT ''"),
                 ("turn_state", "TEXT NOT NULL DEFAULT 'DURABLY_CAPTURED'"),
                 ("response_status", "TEXT NOT NULL DEFAULT 'responded'"),
@@ -877,11 +913,17 @@ class EmotionMemobase:
                 ("lease_until", "TEXT"),
                 ("lease_token", "TEXT"),
                 ("completed_at", "TEXT"),
+                ("error_code", "TEXT"),
+                ("dead_letter_at", "TEXT"),
             ):
                 self._ensure_column(conn, _SESSION_REFLECTION_TABLE, column, definition)
             conn.execute(
                 f"""CREATE INDEX IF NOT EXISTS idx_{_SESSION_REFLECTION_TABLE}_pending
                     ON {_SESSION_REFLECTION_TABLE}(status, next_retry_at, updated_at)"""
+            )
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{_MIRROR_OP_TABLE}_due "
+                f"ON {_MIRROR_OP_TABLE}(status, next_retry_at, updated_at)"
             )
             conn.execute(
                 f"UPDATE {_TURN_TABLE} SET turn_id='legacy:' || id WHERE turn_id IS NULL OR turn_id=''"
@@ -902,7 +944,7 @@ class EmotionMemobase:
             )
             conn.execute(
                 f"UPDATE {_MEMORY_ITEM_TABLE} SET source='legacy_migrated' "
-                "WHERE source IS NULL OR TRIM(source)='' OR source='derived'"
+                "WHERE source IS NULL OR TRIM(source)=''"
             )
             self._migrate_legacy_memory(conn)
 
@@ -922,6 +964,13 @@ class EmotionMemobase:
                 patient_id,
                 _normalise_snapshot(patient_id, raw),
             )
+            self._migrate_legacy_rule_items(conn, patient_id)
+            snapshot = self._snapshot_from_items(conn, self._load_snapshot(conn, patient_id))
+            self._save_snapshot(conn, snapshot, updated_by="system")
+        for row in conn.execute(
+            f"SELECT DISTINCT patient_id FROM {_MEMORY_ITEM_TABLE}"
+        ).fetchall():
+            self._migrate_legacy_rule_items(conn, str(row["patient_id"]))
         conn.execute(
             f"""UPDATE {_TURN_TABLE} AS turns
                 SET consolidation_status='consolidated',
@@ -1046,6 +1095,7 @@ class EmotionMemobase:
                 if isinstance(item, Mapping) and str(item.get("status") or "active").lower() != "active":
                     continue
                 source = "legacy_migrated"
+                original_source = source
                 source_session_id = None
                 source_turn_id = None
                 slot_key = None
@@ -1061,6 +1111,7 @@ class EmotionMemobase:
                 updated_at = now
                 if isinstance(item, Mapping):
                     source = str(item.get("source") or source).strip() or source
+                    original_source = source
                     if source in {"derived", "manual", "user"}:
                         source = "legacy_migrated" if source == "derived" else "user_direct"
                     source_session_id = str(item.get("source_session_id") or "").strip() or None
@@ -1084,6 +1135,8 @@ class EmotionMemobase:
                     confirmed_by = str(item.get("confirmed_by") or "").strip() or None
                     supersedes_item_id = str(item.get("supersedes_item_id") or "").strip() or None
                     metadata = _json_object(item.get("metadata_json") or item.get("metadata"))
+                    if original_source == "derived":
+                        metadata.setdefault("legacy_original_source", original_source)
                     if category == "comfort_strategies" and "effective" in item:
                         metadata.setdefault("effective", item.get("effective"))
                     if category == "comfort_strategies" and "use_count" in item:
@@ -1133,6 +1186,38 @@ class EmotionMemobase:
                         f"UPDATE {_MEMORY_ITEM_TABLE} SET metadata_json=? WHERE item_id=?",
                         (json.dumps(metadata, ensure_ascii=False, sort_keys=True), item_id),
                     )
+
+    def _migrate_legacy_rule_items(self, conn: sqlite3.Connection, patient_id: str) -> None:
+        """隔离旧规则派生 active，保留审计记录且不再进入陪伴上下文。"""
+        rows = conn.execute(
+            f"""SELECT item_id, source, metadata_json, version FROM {_MEMORY_ITEM_TABLE}
+                WHERE patient_id=? AND category IN ('facts', 'preferences', 'events')
+                  AND status='active' AND source IN ('system_inferred', 'derived', 'legacy_migrated')""",
+            (patient_id,),
+        ).fetchall()
+        now = _now()
+        for row in rows:
+            metadata = _json_object(row["metadata_json"])
+            metadata.setdefault("legacy_migration", {})
+            metadata["legacy_migration"].update(
+                {
+                    "from_source": str(metadata.get("legacy_original_source") or row["source"]),
+                    "migrated_at": now,
+                }
+            )
+            conn.execute(
+                f"""UPDATE {_MEMORY_ITEM_TABLE}
+                    SET status='candidate', source='legacy_unverified', version=?,
+                        metadata_json=?, updated_at=?
+                    WHERE patient_id=? AND item_id=? AND status='active'""",
+                (
+                    int(row["version"] or 0) + 1,
+                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                    now,
+                    patient_id,
+                    row["item_id"],
+                ),
+            )
 
     def _snapshot_with_deleted_filtered(
         self,
@@ -1596,7 +1681,18 @@ class EmotionMemobase:
                 raw = json.loads(row["snapshot_json"] or "{}")
             except json.JSONDecodeError:
                 raw = {}
-        data = _normalise_snapshot(patient_id, raw, self._patient_profile(conn, patient_id))
+        try:
+            patient_row = conn.execute(
+                "SELECT 1 FROM patients WHERE patient_id=?",
+                (patient_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            patient_row = None
+        data = _normalise_snapshot(
+            patient_id,
+            raw,
+            self._patient_profile(conn, patient_id) if patient_row else None,
+        )
         data["updated_at"] = stored_updated_at or data.get("updated_at")
         if row:
             data["revision"] = max(int(row["revision"] or 0), int(data.get("revision") or 0))
@@ -1721,12 +1817,36 @@ class EmotionMemobase:
             for row in rows
         ]
 
+    @staticmethod
+    def _mmse_entry_belongs_to_session(
+        entry: Any,
+        *,
+        session_id: str,
+        created_at: str,
+        ended_at: str,
+        total_score: Any,
+    ) -> bool:
+        if not isinstance(entry, Mapping):
+            return False
+        if str(entry.get("session_id") or "").strip():
+            return str(entry.get("session_id") or "").strip() == session_id
+        if total_score is None or str(entry.get("recorded_at") or "").strip() == "":
+            return False
+        try:
+            if int(entry.get("score")) != int(total_score):
+                return False
+        except (TypeError, ValueError):
+            return False
+        recorded_at = str(entry.get("recorded_at") or "").strip()
+        return bool(created_at and ended_at and created_at <= recorded_at <= ended_at)
+
     def _public_snapshot(
         self,
         conn: sqlite3.Connection,
         snapshot: Mapping[str, Any],
     ) -> dict[str, Any]:
         result = self._snapshot_from_items(conn, snapshot)
+        result.pop("_narrative_manual", None)
         result["recent_turns"] = self._read_turns(
             conn, result["patient_id"], _MAX_TURNS_IN_SNAPSHOT
         )
@@ -1763,6 +1883,315 @@ class EmotionMemobase:
     def get_memory_snapshot(self, patient_id: str) -> dict[str, Any]:
         """Explicit alias used by memory-facing APIs."""
         return self.get_snapshot(patient_id)
+
+    def delete_session_data(self, session_id: str) -> Optional[dict[str, Any]]:
+        """Remove one ended session's memory evidence and rebuild its patient projection."""
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            raise ValueError("session_id is required")
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                session = conn.execute(
+                    "SELECT session_id, patient_id, created_at, ended_at, total_mmse_score "
+                    "FROM sessions WHERE session_id=?",
+                    (session_id,),
+                ).fetchone()
+            except sqlite3.OperationalError:
+                return None
+            if not session:
+                return None
+            if not session["ended_at"]:
+                raise ValueError("SESSION_ACTIVE")
+            patient_id = str(session["patient_id"] or "").strip()
+            if not patient_id:
+                return {"session_id": session_id, "patient_id": None, "deleted_items": 0}
+
+            turn_refs = {
+                str(row["id"])
+                for row in conn.execute(
+                    f"SELECT id FROM {_TURN_TABLE} WHERE patient_id=? AND session_id=?",
+                    (patient_id, session_id),
+                ).fetchall()
+            }
+            turn_refs.update(
+                str(row["turn_id"] or "")
+                for row in conn.execute(
+                    f"SELECT turn_id FROM {_TURN_TABLE} WHERE patient_id=? AND session_id=?",
+                    (patient_id, session_id),
+                ).fetchall()
+                if str(row["turn_id"] or "").strip()
+            )
+            turn_sessions = {
+                str(row["turn_id"]): str(row["session_id"] or "").strip()
+                for row in conn.execute(
+                    f"SELECT turn_id, session_id FROM {_TURN_TABLE} WHERE patient_id=?",
+                    (patient_id,),
+                ).fetchall()
+                if str(row["turn_id"] or "").strip()
+            }
+            try:
+                turn_refs.update(
+                    str(row["turn_id"] or "")
+                    for row in conn.execute(
+                        "SELECT turn_id FROM emotion_trajectory WHERE patient_id=? AND session_id=?",
+                        (patient_id, session_id),
+                    ).fetchall()
+                    if str(row["turn_id"] or "").strip()
+                )
+            except sqlite3.OperationalError:
+                pass
+
+            deleted_summary = conn.execute(
+                f"SELECT session_summary FROM {_SESSION_REFLECTION_TABLE} "
+                "WHERE patient_id=? AND session_id=?",
+                (patient_id, session_id),
+            ).fetchone()
+            deleted_markers = (
+                [str(deleted_summary[0] or "").strip()]
+                if deleted_summary and str(deleted_summary[0] or "").strip()
+                else []
+            )
+            all_summaries = conn.execute(
+                f"""SELECT session_id, session_summary FROM {_SESSION_REFLECTION_TABLE}
+                    WHERE patient_id=? AND status='succeeded'
+                      AND COALESCE(session_summary, '')<>''
+                    ORDER BY COALESCE(completed_at, updated_at, created_at) ASC""",
+                (patient_id,),
+            ).fetchall()
+            rows = conn.execute(
+                f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=?",
+                (patient_id,),
+            ).fetchall()
+            deleted_items = 0
+            now = _now()
+            for row in rows:
+                item = dict(row)
+                try:
+                    evidence = json.loads(item.get("evidence_json") or "[]")
+                except json.JSONDecodeError:
+                    evidence = []
+                evidence = evidence if isinstance(evidence, list) else []
+                def evidence_turn(entry: Any) -> str:
+                    if isinstance(entry, Mapping):
+                        return str(entry.get("turn_id") or entry.get("source_turn_id") or "").strip()
+                    return str(entry or "").strip()
+
+                remaining_evidence = [
+                    entry for entry in evidence
+                    if evidence_turn(entry) not in turn_refs
+                ]
+                source_session = str(item.get("source_session_id") or "").strip()
+                source_turn = str(item.get("source_turn_id") or "").strip()
+                affected = source_session == session_id or source_turn in turn_refs or (
+                    len(remaining_evidence) != len(evidence)
+                )
+                if not affected:
+                    continue
+                content = str(item.get("content") or "").strip()
+                user_managed = _event_is_user_managed(item)
+                if remaining_evidence or user_managed:
+                    next_source_turn = source_turn
+                    if next_source_turn in turn_refs:
+                        next_source_turn = ""
+                    surviving_session = source_session if source_session != session_id else ""
+                    if not surviving_session:
+                        for evidence_entry in remaining_evidence:
+                            evidence_id = evidence_turn(evidence_entry)
+                            surviving_session = turn_sessions.get(evidence_id, "")
+                            if surviving_session:
+                                break
+                    evidence_json = (
+                        json.dumps(remaining_evidence, ensure_ascii=False)
+                        if remaining_evidence else None
+                    )
+                    conn.execute(
+                        f"""UPDATE {_MEMORY_ITEM_TABLE}
+                            SET source_session_id=?, source_turn_id=?, evidence_json=?,
+                                version=?, updated_at=?
+                            WHERE patient_id=? AND item_id=?""",
+                        (
+                            surviving_session or None,
+                            next_source_turn or None,
+                            evidence_json,
+                            int(item.get("version") or 0) + 1,
+                            now,
+                            patient_id,
+                            item["item_id"],
+                        ),
+                    )
+                    if source_turn in turn_refs:
+                        self._enqueue_mirror_op(
+                            conn,
+                            patient_id,
+                            str(item["item_id"]),
+                            int(item.get("version") or 0) + 1,
+                            "invalidate",
+                            source_turn,
+                        )
+                    continue
+                if content:
+                    deleted_markers.append(content)
+                next_version = int(item.get("version") or 0) + 1
+                conn.execute(
+                    f"""UPDATE {_MEMORY_ITEM_TABLE}
+                        SET status='deleted', deleted_at=?, version=?, updated_at=?
+                        WHERE patient_id=? AND item_id=?""",
+                    (now, next_version, now, patient_id, item["item_id"]),
+                )
+                conn.execute(
+                    f"""INSERT OR IGNORE INTO {_MEMORY_DELETION_TABLE}
+                        (item_id, patient_id, deletion_token, deleted_by, deleted_at, item_version)
+                        VALUES (?, ?, ?, 'session_delete', ?, ?)""",
+                    (
+                        item["item_id"],
+                        patient_id,
+                        f"session:{session_id}:{item['item_id']}:{next_version}",
+                        now,
+                        next_version,
+                    ),
+                )
+                self._enqueue_mirror_op(
+                    conn,
+                    patient_id,
+                    str(item["item_id"]),
+                    next_version,
+                    "delete",
+                    source_turn or None,
+                )
+                deleted_items += 1
+
+            conn.execute(
+                f"DELETE FROM {_TURN_TABLE} WHERE patient_id=? AND session_id=?",
+                (patient_id, session_id),
+            )
+            conn.execute(
+                "DELETE FROM emotion_trajectory WHERE patient_id=? AND session_id=?",
+                (patient_id, session_id),
+            )
+            conn.execute(
+                f"DELETE FROM {_SESSION_REFLECTION_TABLE} WHERE patient_id=? AND session_id=?",
+                (patient_id, session_id),
+            )
+
+            snapshot = self._load_snapshot(conn, patient_id)
+            emotion_history: list[dict[str, Any]] = []
+            try:
+                trajectory_rows = conn.execute(
+                    """SELECT session_id, turn_id, analysis_status, timestamp,
+                              joy, sadness, anger, fear, anxiety, calm, confusion,
+                              valence, arousal, dominant_emotion, audio_path, source
+                       FROM emotion_trajectory WHERE patient_id=?
+                       ORDER BY timestamp ASC, id ASC""",
+                    (patient_id,),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                trajectory_rows = []
+            for row in trajectory_rows[-_MAX_EMOTION_HISTORY:]:
+                scores = {
+                    name: float(row[name] or 0.0)
+                    for name in _EMOTIONS
+                }
+                emotion_history.append(
+                    {
+                        "scores": scores,
+                        "dominant": row["dominant_emotion"],
+                        "valence": row["valence"],
+                        "arousal": row["arousal"],
+                        "recorded_at": row["timestamp"],
+                        "session_id": row["session_id"],
+                        "turn_id": row["turn_id"],
+                        "audio_path": row["audio_path"],
+                        "source": row["source"],
+                        "analysis_status": row["analysis_status"],
+                    }
+                )
+            snapshot["emotion"] = {
+                "latest": emotion_history[-1] if emotion_history else None,
+                "history": emotion_history,
+            }
+            if emotion_history:
+                snapshot["last_session_id"] = emotion_history[-1].get("session_id")
+                snapshot["last_turn_at"] = emotion_history[-1].get("recorded_at")
+            else:
+                snapshot.pop("last_session_id", None)
+                snapshot.pop("last_turn_at", None)
+
+            narrative = str(snapshot.get("narrative") or "").strip()
+            all_summary_text = [
+                str(row["session_summary"]).strip()
+                for row in all_summaries
+                if str(row["session_summary"] or "").strip()
+            ]
+            surviving_summaries = [
+                str(row["session_summary"]).strip()
+                for row in all_summaries
+                if str(row["session_id"] or "") != session_id
+                and str(row["session_summary"] or "").strip()
+            ]
+            narrative_markers = [
+                marker for marker in deleted_markers
+                if len(_event_text_key(marker)) >= 4
+            ]
+            narrative_key = _event_text_key(narrative)
+            narrative_has_deleted_content = bool(
+                narrative and any(
+                    marker in narrative or _event_text_key(marker) in narrative_key
+                    for marker in narrative_markers
+                )
+            )
+            narrative_is_projection = bool(
+                snapshot.get("_narrative_manual") is False
+                or (
+                    narrative
+                    and all_summaries
+                    and narrative_key == _event_text_key("\n".join(all_summary_text))
+                )
+            )
+            if narrative_is_projection:
+                snapshot["narrative"] = "\n".join(surviving_summaries)
+            elif narrative_has_deleted_content and snapshot.get("_narrative_manual") is not True:
+                fragments = [
+                    fragment.strip()
+                    for fragment in re.split(r"[\r\n。！？；;]+", narrative)
+                    if fragment.strip()
+                ]
+                snapshot["narrative"] = "\n".join(
+                    fragment for fragment in fragments
+                    if not any(
+                        marker in fragment or _event_text_key(marker) in _event_text_key(fragment)
+                        for marker in narrative_markers
+                    )
+                )
+            elif not narrative and surviving_summaries:
+                snapshot["narrative"] = "\n".join(surviving_summaries)
+            mmse_history = [
+                entry for entry in (snapshot.get("mmse_history") or [])
+                if not self._mmse_entry_belongs_to_session(
+                    entry,
+                    session_id=session_id,
+                    created_at=str(session["created_at"] or ""),
+                    ended_at=str(session["ended_at"] or ""),
+                    total_score=session["total_mmse_score"],
+                )
+            ]
+            snapshot["mmse_history"] = mmse_history[-_MAX_MMSE_HISTORY:]
+            snapshot = self._snapshot_from_items(conn, snapshot)
+            patient_row = conn.execute(
+                "SELECT 1 FROM patients WHERE patient_id=?",
+                (patient_id,),
+            ).fetchone()
+            if patient_row:
+                snapshot["profile"] = self._patient_profile(conn, patient_id)
+            self._save_snapshot(conn, snapshot, updated_by="session_delete")
+            result = {
+                "session_id": session_id,
+                "patient_id": patient_id,
+                "deleted_items": deleted_items,
+                "turn_count": len(turn_refs),
+            }
+        result["memobase_delete_enqueued"] = self._schedule_mirror_ops(patient_id)
+        return result
 
     def get_emotion_trajectory(
         self,
@@ -1965,6 +2394,7 @@ class EmotionMemobase:
                     snapshot[key] = _json_copy(value)[-_MAX_MMSE_HISTORY:]
                 elif key == "narrative":
                     snapshot[key] = str(value or "")
+                    snapshot["_narrative_manual"] = updated_by not in {"system", "session_delete"}
                 else:
                     snapshot[key] = _json_copy(value)
             if profile_updates:
@@ -2031,6 +2461,7 @@ class EmotionMemobase:
         score: int,
         weak_dimensions: Optional[list[str]] = None,
         date: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """Append one MMSE result without replacing earlier scores."""
         patient_id = self._patient_id(patient_id)
@@ -2047,6 +2478,8 @@ class EmotionMemobase:
             "weak_dimensions": _strings(weak_dimensions),
             "recorded_at": str(date or _now()).strip(),
         }
+        if str(session_id or "").strip():
+            entry["session_id"] = str(session_id).strip()
         with self._lock, self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
             snapshot = self._load_snapshot(conn, patient_id)
@@ -2225,14 +2658,101 @@ class EmotionMemobase:
         *,
         confirmed_by: str = "user",
     ) -> dict[str, Any]:
-        return self._set_memory_item_status(
-            patient_id,
-            item_id,
-            expected_version,
-            from_status="candidate",
-            to_status="active",
-            actor=confirmed_by,
-        )
+        patient_id = self._patient_id(patient_id)
+        item_id = str(item_id or "").strip()
+        if not item_id:
+            raise ValueError("item_id is required")
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            snapshot = self._load_snapshot(conn, patient_id)
+            row = conn.execute(
+                f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
+                (patient_id, item_id),
+            ).fetchone()
+            if not row:
+                raise KeyError("MEMORY_ITEM_NOT_FOUND")
+            current = self._memory_item_row(row)
+            if current["status"] != "candidate":
+                raise KeyError("MEMORY_ITEM_NOT_CANDIDATE")
+            if int(current["version"]) != int(expected_version):
+                raise MemoryRevisionConflict(int(current["version"]))
+            metadata = _json_object(current.get("metadata_json"))
+            operation = str(metadata.get("suggested_operation") or "").upper()
+            previous: Optional[dict[str, Any]] = None
+            if operation == "SUPERSEDE":
+                target_id = str(current.get("supersedes_item_id") or "").strip()
+                candidates = []
+                if target_id:
+                    target = conn.execute(
+                        f"""SELECT * FROM {_MEMORY_ITEM_TABLE}
+                            WHERE patient_id=? AND item_id=? AND status='active'""",
+                        (patient_id, target_id),
+                    ).fetchone()
+                    if target:
+                        candidates = [target]
+                elif str(current.get("slot_key") or "").strip():
+                    candidates = conn.execute(
+                        f"""SELECT * FROM {_MEMORY_ITEM_TABLE}
+                            WHERE patient_id=? AND mode=? AND category=? AND slot_key=?
+                              AND status='active'""",
+                        (
+                            patient_id,
+                            current["mode"],
+                            current["category"],
+                            current["slot_key"],
+                        ),
+                    ).fetchall()
+                if len(candidates) != 1:
+                    raise MemoryRevisionConflict(int(current["version"]))
+                previous = self._memory_item_row(candidates[0])
+            now = _now()
+            if previous:
+                previous_version = int(previous["version"]) + 1
+                conn.execute(
+                    f"""UPDATE {_MEMORY_ITEM_TABLE}
+                        SET status='superseded', version=?, updated_at=?
+                        WHERE patient_id=? AND item_id=? AND status='active'""",
+                    (previous_version, now, patient_id, previous["item_id"]),
+                )
+                self._enqueue_mirror_op(
+                    conn, patient_id, previous["item_id"], previous_version, "invalidate",
+                    str(previous.get("source_turn_id") or "") or None,
+                )
+                conn.execute(
+                    f"UPDATE {_MEMORY_ITEM_TABLE} SET supersedes_item_id=? WHERE item_id=?",
+                    (previous["item_id"], item_id),
+                )
+            if confirmed_by == "clinician":
+                source = "clinician_confirmed"
+            elif confirmed_by.startswith(("qwen:", "memory:")):
+                source = "llm_verified"
+            else:
+                source = "user"
+            metadata["confirmed_from_source"] = current["source"]
+            version = int(current["version"]) + 1
+            conn.execute(
+                f"""UPDATE {_MEMORY_ITEM_TABLE}
+                    SET status='active', source=?, version=?, confirmed_by=?, metadata_json=?, updated_at=?
+                    WHERE patient_id=? AND item_id=?""",
+                (
+                    source,
+                    version,
+                    confirmed_by,
+                    json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+                    now,
+                    patient_id,
+                    item_id,
+                ),
+            )
+            snapshot = self._snapshot_from_items(conn, snapshot)
+            self._save_snapshot(conn, snapshot, updated_by=confirmed_by)
+            updated = conn.execute(
+                f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
+                (patient_id, item_id),
+            ).fetchone()
+            result = self._memory_item_row(updated)
+        self._schedule_mirror_ops(patient_id)
+        return result
 
     def reject_memory_item(
         self,
@@ -2647,8 +3167,7 @@ class EmotionMemobase:
         current_text = str(current_text or "").strip()
         if not current_text:
             return ([], False) if _include_degraded else []
-        client = self._ensure_memobase()
-        if client is None:
+        if self._memobase is None and not self._memobase_auto:
             self._log(f"[Memobase] gist_search degraded=unavailable patient={patient_id}")
             return ([], True) if _include_degraded else []
         params: dict[str, Any] = {
@@ -2661,9 +3180,24 @@ class EmotionMemobase:
             except ValueError:
                 self._log("[Memobase] 忽略非法 MEMOBASE_EVENT_GIST_TIME_RANGE_DAYS")
         started_at = time.perf_counter()
+        with self._lock, self._connection() as conn:
+            snapshot = conn.execute(
+                f"SELECT revision FROM {_SNAPSHOT_TABLE} WHERE patient_id=?",
+                (patient_id,),
+            ).fetchone()
+        revision = int(snapshot["revision"] or 0) if snapshot else 0
+        cache_key = (patient_id, revision, current_text, tuple(sorted(params.items())))
         try:
-            user = self._get_or_create_memobase_user(client, patient_id)
-            raw_gists = self._search_event_gist(user, current_text, params)
+            gists, cache_source = self._retrieval_cache.get(
+                cache_key,
+                lambda: self._retrieve_event_gists(patient_id, current_text, params),
+            )
+        except (RetrievalBusyError, FutureTimeoutError, RetrievalUnavailableError) as exc:
+            self._log(
+                f"[Memobase] gist_search degraded=unavailable patient={patient_id} "
+                f"reason={type(exc).__name__}"
+            )
+            return ([], True) if _include_degraded else []
         except Exception as exc:
             self._mark_memobase_failed(exc)
             self._log(
@@ -2671,11 +3205,6 @@ class EmotionMemobase:
                 f"error={type(exc).__name__}"
             )
             return ([], True) if _include_degraded else []
-        gists = self._normalise_event_gists(
-            patient_id,
-            raw_gists,
-            max_items=int(topk),
-        )
         with self._lock, self._connection() as conn:
             deleted_turn_ids = self._deleted_turn_ids(conn, patient_id)
             deleted_texts = {
@@ -2701,10 +3230,32 @@ class EmotionMemobase:
         self._log(
             f"[Latency] memobase_event_gist_search_ms={elapsed_ms:.1f} "
             f"patient={patient_id} topk={int(topk)} hits={len(gists)} "
+            f"cache={cache_source} "
             f"event_gist_ids={gist_ids or '-'} source_turn_ids={source_turn_ids or '-'} "
             f"degraded={'none' if gists else 'empty'}"
         )
         return (gists, False) if _include_degraded else gists
+
+    def _retrieve_event_gists(
+        self, patient_id: str, query: str, params: Mapping[str, Any]
+    ) -> list[dict[str, Any]]:
+        client = self._retrieval_client()
+        user = self._get_or_create_memobase_user(client, patient_id)
+        raw_gists = self._search_event_gist(user, query, params)
+        return self._normalise_event_gists(
+            patient_id, raw_gists, max_items=int(params["topk"])
+        )
+
+    def _retrieval_client(self) -> Any:
+        client = self._ensure_memobase()
+        if client is None:
+            raise RetrievalUnavailableError("semantic retrieval is unavailable")
+        if getattr(client, "_client", None) is not None:
+            client = copy.copy(client)
+            client._client = RetrievalHttpClient(
+                client.client, self._retrieval_http_timeout_s
+            )
+        return client
 
     @staticmethod
     def _search_event_gist(user: Any, query: str, params: Mapping[str, Any]) -> Any:
@@ -2845,7 +3396,16 @@ class EmotionMemobase:
                 score = f"{float(similarity):.3f}"
             except (TypeError, ValueError):
                 score = "unknown"
-            block = f"{index}. 摘要：{content}\n   创建时间：{created_at or 'unknown'}；相似度：{score}"
+            # The gist id must survive into the rendered text: downstream
+            # telemetry recovers which memories reached the prompt by parsing
+            # this block, and without it every semantic hit reports zero used
+            # items even though retrieval succeeded.
+            gist_id = str(gist.get("event_gist_id") or "").strip() or "unknown"
+            block = (
+                f"{index}. 摘要：{content}\n"
+                f"   创建时间：{created_at or 'unknown'}；相似度：{score}"
+                f"；event_gist_id={gist_id}"
+            )
             cost = _token_estimate(block)
             if used + cost > token_budget:
                 continue
@@ -2857,6 +3417,12 @@ class EmotionMemobase:
         return "\n".join(lines)
 
     def _render_local_active_fallback(self, patient_id: str) -> str:
+        """Dump the most recent active items, ignoring the current query.
+
+        This is a degraded path used only when semantic search is unavailable.
+        It performs no relevance matching, so its output must never be reported
+        as a semantic retrieval hit.
+        """
         with self._lock, self._connection() as conn:
             items_by_category = self._active_items_by_category(
                 conn, patient_id, mode=WELLBEING
@@ -2873,10 +3439,11 @@ class EmotionMemobase:
         )
         if not items:
             return ""
-        lines = ["[local_active_memory]"]
+        lines = [LOCAL_ACTIVE_MEMORY_MARKER]
         for index, item in enumerate(items[:_LOCAL_FALLBACK_ITEM_LIMIT], 1):
             lines.append(
                 f"{index}. 来源：SQLite active memory_items；"
+                f"item_id={str(item.get('item_id') or 'unknown')}；"
                 f"{labels.get(str(item.get('category') or ''), '记忆')}："
                 f"{_clip(item.get('content'), 220)}"
             )
@@ -3061,17 +3628,12 @@ class EmotionMemobase:
         return self._submit_memobase(self._prewarm_semantic_retrieval_impl, patient_id) is not None
 
     def _prewarm_semantic_retrieval_impl(self, patient_id: str) -> bool:
-        client = self._ensure_memobase()
-        if client is None:
-            return False
         try:
-            user = self._get_or_create_memobase_user(client, patient_id)
-            self._search_event_gist(
-                user,
-                "语义检索预热",
-                {"topk": 1, "similarity_threshold": 1.01},
-            )
+            client = self._retrieval_client()
+            self._get_or_create_memobase_user(client, patient_id)
             return True
+        except RetrievalUnavailableError:
+            return False
         except Exception as exc:
             self._mark_memobase_failed(exc)
             self._log(f"[Memobase] 语义检索预热失败: {type(exc).__name__}")
@@ -3198,12 +3760,27 @@ class EmotionMemobase:
             uuid.NAMESPACE_URL,
             f"lmca-mirror:{patient_id}:{item_id}:{int(item_version)}:{op_type}",
         ).hex
+        item = conn.execute(
+            f"SELECT content, source_turn_id FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
+            (patient_id, item_id),
+        ).fetchone()
+        payload = json.dumps(
+            {
+                "item_id": item_id,
+                "item_version": int(item_version),
+                "op_type": op_type,
+                "source_turn_id": source_turn_id,
+                "content": str(item["content"] or "") if item else "",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         conn.execute(
             f"""INSERT OR IGNORE INTO {_MIRROR_OP_TABLE} (
                     op_id, patient_id, item_id, item_version, op_type,
                     source_turn_id, status, attempt_count, next_retry_at,
-                    last_error, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, ?, ?)""",
+                    last_error, payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, NULL, ?, ?, ?)""",
             (
                 op_id,
                 patient_id,
@@ -3211,6 +3788,7 @@ class EmotionMemobase:
                 int(item_version),
                 op_type,
                 source_turn_id,
+                payload,
                 now,
                 now,
             ),
@@ -3222,15 +3800,37 @@ class EmotionMemobase:
         return self._submit_memobase(self._process_mirror_ops_impl, patient_id) is not None
 
     def _process_mirror_ops_impl(self, patient_id: str) -> bool:
-        now = datetime.now().isoformat()
+        now = datetime.now()
+        now_text = now.isoformat()
+        lease_token = uuid.uuid4().hex
+        lease_until = (now + timedelta(seconds=_REFLECTION_LEASE_SECONDS)).isoformat()
         with self._lock, self._connection() as conn:
             rows = conn.execute(
                 f"""SELECT * FROM {_MIRROR_OP_TABLE}
-                    WHERE patient_id=? AND status='pending'
-                      AND (next_retry_at IS NULL OR next_retry_at<=?)
+                    WHERE patient_id=? AND (
+                        (status IN ('pending','failed') AND (next_retry_at IS NULL OR next_retry_at<=?))
+                        OR (status='running' AND lease_until<=?)
+                    )
                     ORDER BY created_at ASC LIMIT 20""",
-                (patient_id, now),
+                (patient_id, now_text, now_text),
             ).fetchall()
+            claimed_rows = []
+            for row in rows:
+                token = uuid.uuid4().hex
+                until = (now + timedelta(seconds=_REFLECTION_LEASE_SECONDS)).isoformat()
+                conn.execute(
+                    f"""UPDATE {_MIRROR_OP_TABLE}
+                        SET status='running', lease_until=?, lease_token=?, updated_at=?,
+                            error_code=CASE WHEN status='running' THEN 'lease_lost' ELSE error_code END
+                        WHERE op_id=? AND (
+                            (status IN ('pending','failed') AND (next_retry_at IS NULL OR next_retry_at<=?))
+                            OR (status='running' AND lease_until<=?)
+                        )""",
+                    (until, token, now_text, row["op_id"], now_text, now_text),
+                )
+                if conn.execute("SELECT changes() AS n").fetchone()["n"]:
+                    claimed_rows.append({**dict(row), "lease_token": token, "lease_until": until})
+            rows = claimed_rows
         if not rows:
             return True
         client = self._ensure_memobase()
@@ -3239,12 +3839,35 @@ class EmotionMemobase:
         all_succeeded = True
         for op in rows:
             try:
+                payload = json.loads(op.get("payload_json") or "{}") if isinstance(op, dict) else {}
+                content = str(payload.get("content") or "")
                 with self._lock, self._connection() as conn:
-                    item = conn.execute(
-                        f"SELECT content FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
-                        (patient_id, op["item_id"]),
+                    current = conn.execute(
+                        f"SELECT version, status FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=?",
+                        (patient_id, str(payload.get("item_id") or op["item_id"])),
                     ).fetchone()
-                content = str(item["content"] or "") if item else ""
+                    if current and int(current["version"] or 0) > int(payload.get("item_version") or op["item_version"]):
+                        conn.execute(
+                            f"""UPDATE {_MIRROR_OP_TABLE}
+                                SET status='succeeded', error_code='stale_version',
+                                    last_error=NULL, lease_until=NULL, lease_token=NULL, updated_at=?
+                                WHERE op_id=? AND status='running' AND lease_token=?""",
+                            (_now(), op["op_id"], op["lease_token"]),
+                        )
+                        continue
+                    if (
+                        str(op.get("op_type") or payload.get("op_type") or "") == "invalidate"
+                        and current
+                        and str(current["status"] or "") == "active"
+                    ):
+                        conn.execute(
+                            f"""UPDATE {_MIRROR_OP_TABLE}
+                                SET status='succeeded', error_code='shared_active_evidence',
+                                    last_error=NULL, lease_until=NULL, lease_token=NULL, updated_at=?
+                                WHERE op_id=? AND status='running' AND lease_token=?""",
+                            (_now(), op["op_id"], op["lease_token"]),
+                        )
+                        continue
                 ok = self._delete_memobase_memory_item_impl(
                     patient_id,
                     content,
@@ -3253,35 +3876,187 @@ class EmotionMemobase:
                 if not ok:
                     raise RuntimeError("remote invalidation did not complete")
                 with self._lock, self._connection() as conn:
-                    conn.execute(
+                    changed = conn.execute(
                         f"""UPDATE {_MIRROR_OP_TABLE}
-                            SET status='succeeded', updated_at=?, last_error=NULL
-                            WHERE op_id=? AND status='pending'""",
-                        (_now(), op["op_id"]),
-                    )
+                            SET status='succeeded', updated_at=?, last_error=NULL,
+                                error_code=NULL, lease_until=NULL, lease_token=NULL
+                            WHERE op_id=? AND status='running' AND lease_token=? AND lease_until>?""",
+                        (_now(), op["op_id"], op["lease_token"], _now()),
+                    ).rowcount
+                if not changed:
+                    all_succeeded = False
+                else:
+                    self._emit_audit(patient_id, "mirror_succeeded", "success")
             except Exception as exc:
                 all_succeeded = False
                 attempts = int(op["attempt_count"] or 0) + 1
-                failed = attempts >= 3
+                failed = attempts >= _REFLECTION_MAX_ATTEMPTS
                 retry_at = None if failed else (
-                    datetime.now() + timedelta(seconds=min(300, 10 * (2 ** (attempts - 1)))).isoformat()
-                )
+                    datetime.now() + timedelta(
+                        seconds=min(300, 10 * (2 ** (attempts - 1)))
+                    )
+                ).isoformat()
                 with self._lock, self._connection() as conn:
                     conn.execute(
                         f"""UPDATE {_MIRROR_OP_TABLE}
                             SET status=?, attempt_count=?, next_retry_at=?,
-                                last_error=?, updated_at=?
-                            WHERE op_id=? AND status='pending'""",
+                                last_error=?, error_code=?, dead_letter_at=CASE WHEN ? THEN ? ELSE NULL END,
+                                lease_until=NULL, lease_token=NULL, updated_at=?
+                            WHERE op_id=? AND status='running' AND lease_token=?""",
                         (
-                            "failed" if failed else "pending",
+                            "dead_letter" if failed else "pending",
                             attempts,
                             retry_at,
                             f"{type(exc).__name__}: {exc}"[:500],
+                            "remote_error",
+                            failed,
+                            _now() if failed else None,
                             _now(),
                             op["op_id"],
+                            op["lease_token"],
                         ),
                     )
+                self._emit_audit(patient_id, "mirror_dead_letter" if failed else "mirror_retry", "remote_error")
         return all_succeeded
+
+    def requeue_mirror_op(
+        self,
+        op_id: str,
+        reason: str = "manual",
+        *,
+        patient_id: str | None = None,
+    ) -> bool:
+        patient = self._patient_id(patient_id) if patient_id else None
+        with self._lock, self._connection() as conn:
+            where = " AND patient_id=?" if patient else ""
+            updated = conn.execute(
+                f"""UPDATE {_MIRROR_OP_TABLE}
+                    SET status='pending', next_retry_at=NULL, lease_until=NULL, lease_token=NULL,
+                        last_error=?, error_code=NULL, dead_letter_at=NULL, updated_at=?
+                    WHERE op_id=? AND status='dead_letter'{where}""",
+                (_clip(reason, 200), _now(), str(op_id).strip(), *([patient] if patient else [])),
+            ).rowcount
+        self._memory_worker_wakeup.set()
+        self._emit_audit(patient, "mirror_requeued", "success" if updated else "missing")
+        return bool(updated)
+
+    def get_memory_worker_status(self, patient_id: str | None = None) -> dict[str, Any]:
+        """Return operational counters only; never expose patient text or evidence."""
+        params: list[Any] = []
+        where = ""
+        if patient_id:
+            where = " WHERE patient_id=?"
+            params.append(self._patient_id(patient_id))
+        now = datetime.now().isoformat()
+        latest_reflection_where = (
+            " WHERE r2.patient_id=?" if patient_id else " WHERE 1=1"
+        )
+        latest_mirror_where = " WHERE m2.patient_id=?" if patient_id else " WHERE 1=1"
+        with self._lock, self._connection() as conn:
+            reflection = conn.execute(
+                f"""SELECT status, COUNT(*) AS count, MIN(created_at) AS oldest
+                    FROM {_SESSION_REFLECTION_TABLE}{where} GROUP BY status""", tuple(params)
+            ).fetchall()
+            mirror = conn.execute(
+                f"""SELECT status, COUNT(*) AS count, MIN(created_at) AS oldest
+                    FROM {_MIRROR_OP_TABLE}{where} GROUP BY status""", tuple(params)
+            ).fetchall()
+            reflection_summary = conn.execute(
+                f"""SELECT COUNT(*) AS total,
+                    SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) AS running,
+                    SUM(CASE WHEN status='dead_letter' THEN 1 ELSE 0 END) AS dead_letter,
+                    SUM(CASE WHEN status IN ('pending','failed')
+                              AND (next_retry_at IS NULL OR next_retry_at<=?) THEN 1 ELSE 0 END) AS due,
+                    (SELECT error_code FROM {_SESSION_REFLECTION_TABLE} r2
+                     {latest_reflection_where}
+                     AND r2.error_code IS NOT NULL ORDER BY r2.updated_at DESC LIMIT 1) AS latest_error_code
+                    FROM {_SESSION_REFLECTION_TABLE}{where}""",
+                (now, *params, *params) if where else (now,),
+            ).fetchone()
+            mirror_summary = conn.execute(
+                f"""SELECT COUNT(*) AS total,
+                    SUM(CASE WHEN status='running' THEN 1 ELSE 0 END) AS running,
+                    SUM(CASE WHEN status='dead_letter' THEN 1 ELSE 0 END) AS dead_letter,
+                    SUM(CASE WHEN status IN ('pending','failed')
+                              AND (next_retry_at IS NULL OR next_retry_at<=?) THEN 1 ELSE 0 END) AS due,
+                    (SELECT error_code FROM {_MIRROR_OP_TABLE} m2
+                     {latest_mirror_where}
+                     AND m2.error_code IS NOT NULL ORDER BY m2.updated_at DESC LIMIT 1) AS latest_error_code
+                    FROM {_MIRROR_OP_TABLE}{where}""",
+                (now, *params, *params) if where else (now,),
+            ).fetchone()
+        def compact(rows):
+            return {str(row["status"]): {"count": int(row["count"]), "oldest": row["oldest"]} for row in rows}
+        def summary(row):
+            return {
+                "total": int(row["total"] or 0),
+                "due": int(row["due"] or 0),
+                "running": int(row["running"] or 0),
+                "dead_letter": int(row["dead_letter"] or 0),
+                "latest_error_code": row["latest_error_code"],
+            }
+        return {
+            "worker_running": bool(self._memory_worker_thread and self._memory_worker_thread.is_alive()),
+            "as_of": now,
+            "reflections": compact(reflection),
+            "mirror_ops": compact(mirror),
+            "reflection_summary": summary(reflection_summary),
+            "mirror_summary": summary(mirror_summary),
+        }
+
+    def check_memobase_consistency(self, patient_id: str) -> dict[str, Any]:
+        """Compare local lifecycle state with mirror operation coverage without exposing text."""
+        patient_id = self._patient_id(patient_id)
+        queued = 0
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                f"""SELECT item_id, version, status, source_turn_id
+                    FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=?
+                      AND status IN ('superseded','deleted','blocked')""",
+                (patient_id,),
+            ).fetchall()
+            for row in rows:
+                covered = conn.execute(
+                    f"""SELECT 1 FROM {_MIRROR_OP_TABLE}
+                        WHERE patient_id=? AND item_id=? AND item_version=?
+                          AND status='succeeded' LIMIT 1""",
+                    (patient_id, row["item_id"], int(row["version"] or 0)),
+                ).fetchone()
+                if not covered:
+                    self._enqueue_mirror_op(
+                        conn,
+                        patient_id,
+                        str(row["item_id"]),
+                        int(row["version"] or 0),
+                        "delete" if str(row["status"]) == "deleted" else "invalidate",
+                        str(row["source_turn_id"] or "") or None,
+                    )
+                    queued += 1
+            pending = conn.execute(
+                f"""SELECT COUNT(*) FROM {_MIRROR_OP_TABLE}
+                    WHERE patient_id=? AND status IN ('pending','running','failed','dead_letter')""",
+                (patient_id,),
+            ).fetchone()[0]
+        remote_checked = False
+        remote_profile_count = None
+        if self._ensure_memobase() is not None:
+            try:
+                user = self._get_or_create_memobase_user(self._memobase, patient_id)
+                profiles = user.profile(max_token_size=5000)
+                remote_profile_count = len(list(profiles or []))
+                remote_checked = True
+            except Exception:
+                remote_checked = False
+        if queued:
+            self._memory_worker_wakeup.set()
+            self._emit_audit(patient_id, "mirror_consistency_compensation", "queued")
+        return {
+            "patient_id_hash": uuid.uuid5(uuid.NAMESPACE_URL, patient_id).hex,
+            "queued_compensations": queued,
+            "mirror_lag_count": int(pending) + queued,
+            "remote_checked": remote_checked,
+            "remote_profile_count": remote_profile_count,
+        }
 
     def _enqueue_memobase(
         self,
@@ -3327,6 +4102,12 @@ class EmotionMemobase:
             return False
 
         deleted = 0
+        with self._lock, self._connection() as conn:
+            shared_local_item = conn.execute(
+                f"""SELECT 1 FROM {_MEMORY_ITEM_TABLE}
+                    WHERE patient_id=? AND status='active' AND content=? LIMIT 1""",
+                (patient_id, content),
+            ).fetchone() if content else None
         if content:
             try:
                 profiles = user.profile(max_token_size=5000)
@@ -3338,8 +4119,9 @@ class EmotionMemobase:
             for profile in list(profiles or []):
                 profile_content = str(self._field(profile, "content") or "")
                 profile_id = str(self._field(profile, "id") or "")
-                if profile_id and profile_content and (
-                    content in profile_content or profile_content in content
+                if profile_id and profile_content and not shared_local_item and (
+                    re.sub(r"[^\w]+", "", profile_content)
+                    == re.sub(r"[^\w]+", "", content)
                 ):
                     try:
                         if user.delete_profile(profile_id):
@@ -3648,31 +4430,6 @@ class EmotionMemobase:
         return waterline
 
     @staticmethod
-    def _default_consolidation_patch(turns: list[Mapping[str, Any]]) -> dict[str, Any]:
-        patch = {"facts": [], "preferences": [], "events": []}
-        known = {field: set() for field in patch}
-        for turn in turns:
-            items = _extract_memory_items(str(turn.get("user_message") or ""))
-            evidence_turn_id = str(
-                turn.get("turn_id") or turn.get("local_turn_id") or ""
-            ).strip()
-            for field in patch:
-                for item in items[field]:
-                    if item in known[field]:
-                        continue
-                    known[field].add(item)
-                    patch[field].append(
-                        {
-                            "id": f"derived:{evidence_turn_id}:{field}:{len(patch[field])}",
-                            "text": item,
-                            "source": "derived",
-                            "status": "active",
-                            "evidence_turn_ids": [evidence_turn_id] if evidence_turn_id else [],
-                        }
-                    )
-        return patch
-
-    @staticmethod
     def _validate_consolidation_patch(patch: Any) -> dict[str, Any]:
         if patch is None:
             return {}
@@ -3936,6 +4693,10 @@ class EmotionMemobase:
     ) -> dict[str, Any]:
         """Consolidate each pending turn exactly once, independent of session order."""
         patient_id = self._patient_id(patient_id)
+        if patch is not None or patch_builder is not None:
+            raise ValueError(
+                "direct consolidation patches are disabled; use Qwen reflection candidates"
+            )
         session_id = str(session_id).strip() or None if session_id else None
         with self._lock, self._connection() as conn:
             upper = cutoff_turn_id
@@ -3980,7 +4741,9 @@ class EmotionMemobase:
             except TypeError:
                 generated = patch_builder(turns)
         else:
-            generated = patch if patch is not None else self._default_consolidation_patch(turns)
+            # Turn persistence remains available to callers that explicitly provide a patch;
+            # session memory extraction is owned exclusively by reflect_session().
+            generated = patch if patch is not None else {}
         validated = self._validate_consolidation_patch(generated)
         with self._lock, self._connection() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -4028,6 +4791,7 @@ class EmotionMemobase:
             self._apply_consolidation_items(conn, patient_id, merged)
             stored = self._snapshot_from_items(conn, current)
             stored["narrative"] = str(merged.get("narrative") or "")
+            stored["_narrative_manual"] = False
             stored["last_consolidated_turn_id"] = waterline
             self._save_snapshot(conn, stored, updated_by="system")
         return {
@@ -4057,7 +4821,34 @@ class EmotionMemobase:
         return [dict(row) for row in rows if str(row["user_message"] or "").strip()]
 
     @staticmethod
-    def _reflection_prompt(turns: list[Mapping[str, Any]]) -> str:
+    def _mark_reflection_turns_complete(
+        conn: sqlite3.Connection,
+        patient_id: str,
+        session_id: str,
+    ) -> None:
+        now = _now()
+        conn.execute(
+            f"""UPDATE {_TURN_TABLE}
+                SET consolidation_status='skipped', consolidated_at=?
+                WHERE patient_id=? AND session_id=? AND consolidation_status='pending'
+                  AND UPPER(COALESCE(turn_state, '')) IN
+                      ('CANCELLED', 'FAILED', 'RESPONSE_CANCELLED')""",
+            (now, patient_id, session_id),
+        )
+        conn.execute(
+            f"""UPDATE {_TURN_TABLE}
+                SET consolidation_status='consolidated', consolidated_at=?
+                WHERE patient_id=? AND session_id=? AND consolidation_status='pending'
+                  AND UPPER(COALESCE(turn_state, '')) NOT IN
+                      ('CANCELLED', 'FAILED', 'RESPONSE_CANCELLED')""",
+            (now, patient_id, session_id),
+        )
+
+    @staticmethod
+    def _reflection_prompt(
+        turns: list[Mapping[str, Any]],
+        active_memory: list[Mapping[str, Any]] | None = None,
+    ) -> str:
         transcript = []
         for turn in turns:
             turn_id = str(turn["turn_id"])
@@ -4080,39 +4871,78 @@ class EmotionMemobase:
                 "valid_until": "ISO-8601 date/time or null",
                 "sensitivity": "normal|sensitive|high",
                 "confidence": 0.0,
-                "slot_key": "optional string",
+                "slot_key": "stable field key or null",
+                "supersedes_item_id": "existing active item_id or null",
                 "suggested_operation": "ADD|SUPERSEDE|CANDIDATE|NOOP|BLOCK",
             }],
         }
+        active = [
+            {
+                "item_id": str(item.get("item_id") or ""),
+                "category": str(item.get("category") or ""),
+                "content": str(item.get("content") or ""),
+                "slot_key": item.get("slot_key"),
+                "valid_until": item.get("valid_until"),
+            }
+            for item in (active_memory or [])
+            if str(item.get("item_id") or "").strip()
+        ]
         return (
-            "你在进行会话结束后的影子记忆抽取。只返回一个 JSON 对象，不要 Markdown。"
-            "只可根据标记为 user 的原话给出证据；assistant context 仅用于理解指代，绝不能作为事实或 quote。"
-            "按以下顺序逐条扫描每个 user turn，再检查跨轮关系：1) 先处理明确纠正；2) 再合并多轮事实；3) 最后处理单轮事实。每个明确纠正至少输出一条 candidate。"
-            "明确纠正必须提取为一条 candidate：识别“不是A，是B”“改成B”“我记错了”“搬到B”等表达时，记录被纠正后的B，suggested_operation 使用 SUPERSEDE，并保留纠正所在 user turn；不能因为纠正只有一轮、内容简单或已有旧记忆而漏掉。"
-            "多轮 user 原话合起来形成长期陪伴价值时，必须形成一条综合 candidate，并在 evidence_turn_ids 中列出所有支持该事实的 user turn；不要把一个跨轮事实拆成互不相干的单轮记忆。例如“晚上一个人时难受”+“那样时常常睡不着”必须合并为一条同时包含独处、难受和失眠的 candidate，evidence_turn_ids 必须包含这两轮；“女儿周末来看我”+“陪我下棋，我很开心”必须合并为一条同时包含女儿、下棋和开心的 candidate，不能只记其中一轮，也不能输出两条单轮 candidate；“我不想被催着回答”+“慢一点我才能想起来”也必须合并为一条慢节奏边界 candidate。"
-            "负向偏好和长期边界可以保存，但 content 必须保留否定方向；对症状、争执、危机或自伤意图的否认通常不保存，绝不能反写为存在；带“现在、今天、这次、暂时”等短期范围的拒绝必须保留范围或 valid_until，不得升级为永久边界。"
-            "只要 user 原话含“可能、也许、好像、不太确定、记得但不确定”等不确定标记，candidate content 必须原样保留不确定性，禁止写成“用户计划”“用户希望”“已经”“一定”等确定表述；只要含明确的过去、当前或未来时间范围（包括“这两天”“过几天”“明天”“下周”“下月”“之后”等），也必须保留原话中的时间词或填写 valid_until。observed_at 必须填写对应 user turn 的 observed_at 值，不能把 schema 中的示例文字（如 ISO-8601 date/time）原样返回。"
-            "assistant context 不能增加、确认或推断患者事实；例如 assistant 提出的诊断、恐惧、关系判断或限制，若 user 没有明确说过，必须拒绝该记忆。单次吃饭、短暂在家、喝水、刚醒等一次性日常事实没有长期陪伴价值，除非 user 明确说明其长期意义，否则使用空数组。对明确的暂时安全边界，必须生成带原话时间范围的 candidate，不能因为只有一轮而漏记。冲突、试探、过去时和不确定信息可以作为低置信 candidate，但 content 必须明确原话的时间和不确定性；没有可靠长期陪伴价值时使用空数组。所有 candidate 仍只进入 shadow，不会自动 active。\n"
-            f"JSON schema:\n{json.dumps(schema, ensure_ascii=False)}\n\n会话记录：\n"
-            + "\n".join(transcript)
+            "从会话提取对后续陪伴有用的记忆；只返回 JSON，不诊断、不臆测。\n"
+            "证据：只相信 [user]；[assistant] 不能作事实。source_turn_id 必须属于 evidence_turn_ids。"
+            "evidence_quote 必须逐字引用 user；多轮按 turn 顺序逐行引用。content 必须保留否定方向、时间和不确定性。\n"
+            "负向偏好和长期边界可以保存，但 content 必须保留否定方向；对症状、争执、危机或自伤意图的否认通常不保存，"
+            "绝不能反写为存在；带“现在、今天、这次、暂时”等短期范围的拒绝必须保留范围或 valid_until，不得升级为永久边界。\n"
+            "明确纠正必须提取为一条 candidate：识别“不是A，是B”“改成B”“我记错了”“搬到B”等表达时，记录被纠正后的B，"
+            "suggested_operation 使用 SUPERSEDE，并保留纠正所在 user turn；不能因为纠正只有一轮、内容简单或已有旧记忆而漏掉。\n"
+            "多轮 user 原话合起来形成长期陪伴价值时，必须形成一条综合 candidate，并在 evidence_turn_ids 中列出所有支持该事实的 user turn；"
+            "不要把一个跨轮事实拆成互不相干的单轮记忆。\n"
+            "类别：facts 身份/关系/居住/用药；preferences 稳定偏好；events 重要经历/变化；"
+            "emotional_triggers 情绪触发；boundaries 互动边界；comfort_strategies 用户确认有效的方法。"
+            "寒暄、天气、一次性小事、助手猜测、明确否认均为 NOOP。\n"
+            "时间：出现今天/明天/本周/下周/下个月等相对日期，就必须填晚于 observed_at 的 valid_until，不论类别；长期事实才填 null。"
+            "content 保留用户的相对时间，不自行改写成绝对日期。\n"
+            "操作：新增 ADD；明确更正用 SUPERSEDE，并填写 EXISTING ACTIVE MEMORY 中被替换项的真实 item_id；无法唯一匹配则填 null，不得伪造。"
+            "同一事实只输出一条并合并证据。用户直接表达的高风险内容为 high；明确否认不保存。"
+            "无内容时也必须返回完整 JSON：{\"session_summary\":{},\"memory_candidates\":[]}。\n"
+            f"JSON schema:\n{json.dumps(schema, ensure_ascii=False, separators=(',', ':'))}\n\n"
+            "EXISTING ACTIVE MEMORY:\n" + json.dumps(active, ensure_ascii=False, separators=(',', ':'))
+            + "\n\n会话记录：\n" + "\n".join(transcript)
         )
+
+    @staticmethod
+    def _invoke_memory_model(prompt: str, model: str, max_tokens: int) -> Any:
+        kwargs = {
+            "model": model,
+            "temperature": 0,
+            "max_tokens": max_tokens,
+            "timeout": 30,
+            "max_retries": 2,
+            "streaming": False,
+            "disable_thinking": model.lower().startswith("qwen"),
+        }
+        if os.getenv("DASHSCOPE_API_KEY"):
+            from src.llm.http_client_pool import get_dashscope_chat_openai
+            llm = get_dashscope_chat_openai(**kwargs)
+        elif os.getenv("SILICONFLOW_API_KEY"):
+            from src.llm.http_client_pool import get_siliconflow_chat_openai
+            llm = get_siliconflow_chat_openai(**kwargs)
+        else:
+            raise RuntimeError("memory reflection provider is unavailable")
+        response = llm.invoke([{"role": "user", "content": prompt}])
+        return getattr(response, "content", response)
 
     def _invoke_session_reflector(self, prompt: str) -> Any:
         if self._session_reflector is not None:
             return self._session_reflector(prompt)
-        from src.llm.http_client_pool import get_chat_openai
+        model = str(os.getenv("MEMORY_REFLECTION_MODEL") or "qwen3.8-max").strip()
+        return self._invoke_memory_model(prompt, model, 1600)
 
-        llm = get_chat_openai(
-            model=os.getenv("MEMORY_REFLECTION_MODEL") or None,
-            temperature=0,
-            max_tokens=1600,
-            timeout=30,
-            max_retries=1,
-            streaming=False,
-            disable_thinking=True,
-        )
-        response = llm.invoke([{"role": "user", "content": prompt}])
-        return getattr(response, "content", response)
+    def _invoke_session_verifier(self, prompt: str) -> Any:
+        if self._session_verifier is not None:
+            return self._session_verifier(prompt)
+        model = str(os.getenv("MEMORY_VERIFICATION_MODEL") or "qwen-plus").strip()
+        return self._invoke_memory_model(prompt, model, 800)
 
     @staticmethod
     def _reflection_payload(value: Any) -> dict[str, Any]:
@@ -4126,6 +4956,122 @@ class EmotionMemobase:
         if not isinstance(parsed, Mapping):
             raise ValueError("reflection response must be a JSON object")
         return dict(parsed)
+
+    @staticmethod
+    def _verification_prompt(items: list[Mapping[str, Any]]) -> str:
+        return (
+            "复核长期陪伴记忆，只返回 JSON；每个 item_id 输出一次 CONFIRM 或 REJECT，不改写 candidate。"
+            "直接由 user_evidence 支持且字段完整就 CONFIRM，包括固定日程、过去经历、关系变化、偏好和互动边界。"
+            "只有以下情况 REJECT：证据来自 assistant 或用户明确否认；content 丢失否定/时间/不确定性；"
+            "出现相对日期却没有 valid_until；或 SUPERSEDE 在 active_conflicts 找不到唯一旧项。"
+            "高敏感内容有用户直接证据即可 CONFIRM，不以‘是否长期’作为拒绝理由。"
+            "格式：{\"decisions\":[{\"item_id\":\"...\",\"decision\":\"CONFIRM|REJECT\"}]}\n"
+            + json.dumps(items, ensure_ascii=False, separators=(",", ":"))
+        )
+
+    def _verification_inputs(
+        self,
+        conn: sqlite3.Connection,
+        patient_id: str,
+        item_ids: list[str],
+        turns: list[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        by_turn_id = {str(turn["turn_id"]): turn for turn in turns}
+        result = []
+        for item_id in item_ids:
+            row = conn.execute(
+                f"SELECT * FROM {_MEMORY_ITEM_TABLE} WHERE patient_id=? AND item_id=? AND status='candidate'",
+                (patient_id, item_id),
+            ).fetchone()
+            if not row:
+                continue
+            item = self._memory_item_row(row)
+            try:
+                evidence = json.loads(item.get("evidence_json") or "[]")
+            except json.JSONDecodeError as exc:
+                raise ValueError("verification evidence is invalid") from exc
+            if not isinstance(evidence, list):
+                raise ValueError("verification evidence is invalid")
+            evidence_turns = [
+                by_turn_id.get(str(entry.get("turn_id") or ""))
+                for entry in evidence if isinstance(entry, Mapping)
+            ]
+            if not evidence_turns or not all(evidence_turns):
+                raise ValueError("verification evidence is missing")
+            metadata = _json_object(item.get("metadata_json"))
+            conflicts: list[dict[str, Any]] = []
+            if str(metadata.get("suggested_operation") or "").upper() == "SUPERSEDE":
+                target_id = str(item.get("supersedes_item_id") or "").strip()
+                if target_id:
+                    target = conn.execute(
+                        f"""SELECT item_id, category, content, slot_key FROM {_MEMORY_ITEM_TABLE}
+                            WHERE patient_id=? AND item_id=? AND status='active'""",
+                        (patient_id, target_id),
+                    ).fetchone()
+                    conflicts = [dict(target)] if target else []
+                slot_key = str(item.get("slot_key") or "").strip()
+                if slot_key and not conflicts:
+                    conflicts = [dict(conflict) for conflict in conn.execute(
+                        f"""SELECT item_id, category, content, slot_key FROM {_MEMORY_ITEM_TABLE}
+                            WHERE patient_id=? AND mode=? AND category=? AND slot_key=? AND status='active'""",
+                        (patient_id, item["mode"], item["category"], slot_key),
+                    ).fetchall()]
+            result.append({
+                "item_id": item_id,
+                "candidate": {
+                    "category": item["category"], "content": item["content"],
+                    "valid_until": item.get("valid_until"),
+                    "sensitivity": item.get("sensitivity"),
+                    "suggested_operation": metadata.get("suggested_operation"),
+                },
+                "user_evidence": [
+                    {"turn_id": turn["turn_id"], "text": turn["user_message"]}
+                    for turn in evidence_turns
+                ],
+                "active_conflicts": conflicts,
+            })
+        return result
+
+    def _verify_candidates(
+        self,
+        patient_id: str,
+        item_ids: list[str],
+        turns: list[Mapping[str, Any]],
+    ) -> dict[str, int | str]:
+        with self._lock, self._connection() as conn:
+            items = self._verification_inputs(conn, patient_id, item_ids, turns)
+        if not items:
+            return {"status": "skipped", "confirmed_count": 0, "rejected_count": 0}
+        payload = self._reflection_payload(
+            self._invoke_session_verifier(self._verification_prompt(items))
+        )
+        decisions = payload.get("decisions")
+        expected = {item["item_id"] for item in items}
+        if not isinstance(decisions, list):
+            raise ValueError("verification decisions must be a list")
+        parsed: dict[str, str] = {}
+        for decision in decisions:
+            if not isinstance(decision, Mapping):
+                raise ValueError("verification decision is invalid")
+            item_id = str(decision.get("item_id") or "").strip()
+            value = str(decision.get("decision") or "").upper().strip()
+            if item_id in parsed or item_id not in expected or value not in {"CONFIRM", "REJECT"}:
+                raise ValueError("verification decision is invalid")
+            parsed[item_id] = value
+        if set(parsed) != expected:
+            raise ValueError("verification decisions are incomplete")
+        model = str(os.getenv("MEMORY_VERIFICATION_MODEL") or "qwen-plus").strip()
+        actor = f"memory:{model}|prompt:{_VERIFICATION_PROMPT_VERSION}|run:{uuid.uuid4().hex[:12]}"
+        confirmed = rejected = 0
+        for item in items:
+            current = self.get_memory_item(patient_id, item["item_id"])
+            if parsed[current["item_id"]] == "CONFIRM":
+                self.confirm_memory_item(patient_id, current["item_id"], current["version"], confirmed_by=actor)
+                confirmed += 1
+            else:
+                self.reject_memory_item(patient_id, current["item_id"], current["version"], rejected_by=actor)
+                rejected += 1
+        return {"status": "succeeded", "confirmed_count": confirmed, "rejected_count": rejected}
 
     def _claim_session_reflection(
         self,
@@ -4148,14 +5094,11 @@ class EmotionMemobase:
             ).fetchone()
             if row and row["status"] == "succeeded":
                 return {"claimed": False, "row": dict(row), "idempotent_replay": True}
+            if row and row["status"] == "dead_letter" and not force:
+                return {"claimed": False, "row": dict(row), "deferred": True}
             if row and row["status"] == "running" and str(row["lease_until"] or "") > now_text:
                 return {"claimed": False, "row": dict(row), "deferred": True}
-            if (
-                row
-                and row["status"] == "failed"
-                and not force
-                and str(row["next_retry_at"] or "") > now_text
-            ):
+            if row and row["status"] in {"failed", "pending"} and not force and str(row["next_retry_at"] or "") > now_text:
                 return {"claimed": False, "row": dict(row), "deferred": True}
             attempts = int(row["attempt_count"] or 0) + 1 if row else 1
             lease_until = (now + timedelta(seconds=_REFLECTION_LEASE_SECONDS)).isoformat()
@@ -4164,7 +5107,8 @@ class EmotionMemobase:
                 conn.execute(
                     f"""UPDATE {_SESSION_REFLECTION_TABLE}
                         SET status='running', attempt_count=?, next_retry_at=NULL,
-                            last_error=NULL, lease_until=?, lease_token=?, updated_at=?
+                            last_error=NULL, error_code=NULL, dead_letter_at=NULL,
+                            lease_until=?, lease_token=?, updated_at=?
                         WHERE patient_id=? AND session_id=?""",
                     (attempts, lease_until, lease_token, now_text, patient_id, session_id),
                 )
@@ -4220,25 +5164,116 @@ class EmotionMemobase:
                     "session_id": session_id,
                 }
             attempts = int(row["attempt_count"] or 1) if row else 1
-            retry_at = datetime.now() + timedelta(
+            terminal = attempts >= _REFLECTION_MAX_ATTEMPTS
+            retry_at = None if terminal else datetime.now() + timedelta(
                 seconds=min(300, _REFLECTION_RETRY_SECONDS * (2 ** min(attempts - 1, 2)))
             )
+            error_code = self._reflection_error_code(exc)
             conn.execute(
                 f"""UPDATE {_SESSION_REFLECTION_TABLE}
-                    SET status='failed', next_retry_at=?, last_error=?, lease_until=NULL,
-                        lease_token=NULL, updated_at=?
+                    SET status=?, next_retry_at=?, last_error=?, error_code=?,
+                        dead_letter_at=CASE WHEN ? THEN ? ELSE NULL END,
+                        lease_until=NULL, lease_token=NULL, updated_at=?
                     WHERE patient_id=? AND session_id=? AND status='running'
                       AND lease_token=?""",
                 (
-                    retry_at.isoformat(),
+                    "dead_letter" if terminal else "failed",
+                    retry_at.isoformat() if retry_at else None,
                     f"{type(exc).__name__}: {exc}"[:500],
+                    error_code,
+                    terminal,
+                    _now() if terminal else None,
                     _now(),
                     patient_id,
                     session_id,
                     lease_token,
                 ),
             )
-        return {"status": "failed", "patient_id": patient_id, "session_id": session_id}
+        self._emit_audit(patient_id, "reflection_dead_letter" if terminal else "reflection_retry", error_code)
+        return {"status": "dead_letter" if terminal else "failed", "patient_id": patient_id, "session_id": session_id, "error_code": error_code}
+
+    @staticmethod
+    def _reflection_error_code(exc: Exception) -> str:
+        message = str(exc).lower()
+        if isinstance(exc, (json.JSONDecodeError,)) or "json" in message or "payload" in message:
+            return "invalid_payload"
+        if "safety" in message or "evidence" in message:
+            return "evidence_rejected"
+        if "qwen" in message or "provider" in message or "timeout" in message:
+            return "provider_error"
+        return "configuration_error" if isinstance(exc, (ValueError, RuntimeError)) else "provider_error"
+
+    def enqueue_session_reflection(self, patient_id: str, session_id: str) -> dict[str, Any]:
+        patient_id = self._patient_id(patient_id)
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            raise ValueError("session_id is required")
+        now = _now()
+        key = uuid.uuid5(uuid.NAMESPACE_URL, f"lmca-session-reflection:{patient_id}:{session_id}").hex
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                f"""INSERT INTO {_SESSION_REFLECTION_TABLE}
+                    (patient_id, session_id, idempotency_key, status, created_at, updated_at)
+                    VALUES (?, ?, ?, 'pending', ?, ?)
+                    ON CONFLICT(patient_id, session_id) DO UPDATE SET
+                    status=CASE WHEN {_SESSION_REFLECTION_TABLE}.status IN ('failed','dead_letter') THEN 'pending' ELSE {_SESSION_REFLECTION_TABLE}.status END,
+                    next_retry_at=NULL, last_error=NULL, error_code=NULL,
+                    dead_letter_at=NULL, updated_at=?""",
+                (patient_id, session_id, key, now, now, now),
+            )
+            row = conn.execute(
+                f"SELECT * FROM {_SESSION_REFLECTION_TABLE} WHERE patient_id=? AND session_id=?",
+                (patient_id, session_id),
+            ).fetchone()
+        self._memory_worker_wakeup.set()
+        self._emit_audit(patient_id, "reflection_enqueued", "success")
+        return dict(row) if row else {"patient_id": patient_id, "session_id": session_id, "status": "pending"}
+
+    def claim_due_reflection_tasks(self, limit: int = 10) -> list[dict[str, Any]]:
+        now = datetime.now()
+        now_text = now.isoformat()
+        claimed: list[dict[str, Any]] = []
+        with self._lock, self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                f"""SELECT * FROM {_SESSION_REFLECTION_TABLE}
+                    WHERE (status IN ('pending','failed') AND (next_retry_at IS NULL OR next_retry_at<=?))
+                       OR (status='running' AND lease_until<=?)
+                    ORDER BY created_at LIMIT ?""",
+                (now_text, now_text, max(1, min(int(limit), 100))),
+            ).fetchall()
+            for row in rows:
+                attempts = int(row["attempt_count"] or 0) + 1
+                token = uuid.uuid4().hex
+                lease_until = (now + timedelta(seconds=_REFLECTION_LEASE_SECONDS)).isoformat()
+                conn.execute(
+                    f"""UPDATE {_SESSION_REFLECTION_TABLE}
+                        SET status='running', attempt_count=?, next_retry_at=NULL,
+                            lease_until=?, lease_token=?, updated_at=?
+                        WHERE patient_id=? AND session_id=?
+                          AND (status IN ('pending','failed') OR lease_until<=?)""",
+                    (attempts, lease_until, token, now_text, row["patient_id"], row["session_id"], now_text),
+                )
+                if conn.execute("SELECT changes() AS n").fetchone()["n"]:
+                    claimed.append({**dict(row), "attempt_count": attempts, "lease_token": token, "lease_until": lease_until, "status": "running"})
+        for task in claimed:
+            self._emit_audit(str(task["patient_id"]), "reflection_claimed", "success")
+        return claimed
+
+    def requeue_session_reflection(self, patient_id: str, session_id: str, reason: str = "manual") -> bool:
+        patient_id = self._patient_id(patient_id)
+        with self._lock, self._connection() as conn:
+            updated = conn.execute(
+                f"""UPDATE {_SESSION_REFLECTION_TABLE}
+                    SET status='pending', next_retry_at=NULL, lease_until=NULL, lease_token=NULL,
+                        last_error=?, error_code=NULL, dead_letter_at=NULL, updated_at=?
+                    WHERE patient_id=? AND session_id=?""",
+                (_clip(reason, 200), _now(), patient_id, str(session_id).strip()),
+            ).rowcount
+        self._memory_worker_wakeup.set()
+        self._emit_audit(patient_id, "reflection_requeued", "success" if updated else "missing")
+        return bool(updated)
 
     def get_session_reflection(self, patient_id: str, session_id: str) -> dict[str, Any]:
         patient_id = self._patient_id(patient_id)
@@ -4286,17 +5321,23 @@ class EmotionMemobase:
         session_id: str,
         *,
         force: bool = False,
+        _claimed_lease: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Run one post-session LLM reflection and persist only shadow candidates."""
+        """Extract session candidates after a session ends."""
         patient_id = self._patient_id(patient_id)
         session_id = str(session_id or "").strip()
         if not session_id:
             raise ValueError("session_id is required")
         with self._lock, self._connection() as conn:
             turns = self._session_turns_for_reflection(conn, patient_id, session_id)
+            active_memory = [
+                item
+                for items in self._active_items_by_category(conn, patient_id, mode=WELLBEING).values()
+                for item in items
+            ]
         if not turns:
             return {"status": "skipped", "patient_id": patient_id, "session_id": session_id}
-        claim = self._claim_session_reflection(patient_id, session_id, force=force)
+        claim = dict(_claimed_lease or self._claim_session_reflection(patient_id, session_id, force=force))
         if not claim.get("claimed"):
             row = claim.get("row") or {}
             return {
@@ -4307,10 +5348,23 @@ class EmotionMemobase:
                 "deferred": bool(claim.get("deferred")),
             }
         lease_token = str(claim["lease_token"])
+        candidate_item_ids: list[str] = []
+        verification: dict[str, int | str] = {
+            "status": "disabled", "confirmed_count": 0, "rejected_count": 0,
+        }
         try:
             payload = self._reflection_payload(
-                self._invoke_session_reflector(self._reflection_prompt(turns))
+                self._invoke_session_reflector(self._reflection_prompt(turns, active_memory))
             )
+            if not payload.get("memory_candidates") and any(
+                str(turn.get("user_message") or "").strip() for turn in turns
+            ):
+                payload = self._reflection_payload(
+                    self._invoke_session_reflector(
+                        self._reflection_prompt(turns, active_memory)
+                        + "\n请再次逐条复核 user 原话：如果存在任何可作为长期陪伴候选的事实、偏好、临时边界、关系变化或高风险表达，请按 schema 输出 candidate；只有确实没有可保存内容时才返回空数组。"
+                    )
+                )
         except Exception as exc:
             return self._fail_session_reflection(patient_id, session_id, exc, lease_token)
 
@@ -4401,9 +5455,11 @@ class EmotionMemobase:
                 }
                 candidate_count = 0
                 rejected_count = 0
+                safety_failure = False
                 for index, candidate in enumerate(candidates):
                     if not isinstance(candidate, Mapping):
                         rejected_count += 1
+                        safety_failure = True
                         continue
                     category = str(candidate.get("category") or "").strip()
                     content = str(candidate.get("content") or "").strip()
@@ -4418,15 +5474,30 @@ class EmotionMemobase:
                             or str(references[0] or "").strip() in multi_evidence_turns
                         )
                     ):
+                        # A single-turn candidate that overlaps a multi-turn one
+                        # usually restates part of it, so it is dropped to keep
+                        # shallow evidence out of the store.  It is not a
+                        # malformed payload, so it must not abort the session:
+                        # doing so discarded the well-formed multi-turn
+                        # candidate alongside it and left the whole reflection
+                        # empty.
                         rejected_count += 1
                         continue
                     if (
                         category not in _REFLECTION_CATEGORIES
                         or not content or len(content) > 500
                         or operation not in _REFLECTION_OPERATIONS
-                        or not source or not isinstance(references, (list, tuple))
+                        or not isinstance(references, (list, tuple))
                         or not quote or len(quote) > 240
                     ):
+                        rejected_count += 1
+                        safety_failure = True
+                        continue
+                    if source is None:
+                        # The cited turn does not belong to this session, so
+                        # nothing available here can ground the claim.  Refusing
+                        # the candidate is the intended outcome rather than a
+                        # malformed payload, so the session must still complete.
                         rejected_count += 1
                         continue
                     evidence_turns = [
@@ -4455,8 +5526,15 @@ class EmotionMemobase:
                         ):
                             quote = source_text
                         else:
+                            # The quote is not verbatim from the patient, which is
+                            # how assistant-induced claims are caught.  Refusing
+                            # this candidate is the guard working as intended, so
+                            # the session must still complete and keep whatever
+                            # other candidates were properly grounded.
                             rejected_count += 1
                             continue
+                    if operation in {"NOOP", "BLOCK"}:
+                        continue
                     sensitivity = str(candidate.get("sensitivity") or "").lower().strip()
                     try:
                         confidence = float(candidate.get("confidence"))
@@ -4474,11 +5552,15 @@ class EmotionMemobase:
                             datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
                         except ValueError:
                             rejected_count += 1
+                            safety_failure = True
                             continue
                     if sensitivity not in {"normal", "sensitive", "high"} or not 0 <= confidence <= 1:
                         rejected_count += 1
+                        safety_failure = True
                         continue
-                    source_text = str(source["user_message"] or "")
+                    source_text = "\n".join(
+                        str(turn["user_message"] or "") for turn in evidence_turns
+                    )
                     denies_non_memory_fact = _direct_non_memory_denial(source_text) and not any(
                         marker in source_text for marker in _UNCERTAINTY_MARKERS
                     )
@@ -4500,6 +5582,11 @@ class EmotionMemobase:
                         marker in content for marker in _UNCERTAINTY_MARKERS
                     ):
                         content = source_text
+                    source_negations = [
+                        marker for marker in _NEGATED_NON_MEMORY_TERMS if marker in source_text
+                    ]
+                    if source_negations and any(marker not in content for marker in source_negations):
+                        content = source_text
                     temporary_refusal = (
                         category == "boundaries"
                         and any(marker in source_text for marker in _TEMPORARY_SCOPE_MARKERS)
@@ -4516,7 +5603,7 @@ class EmotionMemobase:
                         )
                         if marker in source_text
                     ]
-                    if source_has_time_scope and valid_until in (None, "") and any(
+                    if source_has_time_scope and any(
                         marker not in content for marker in source_time_markers
                     ):
                         content = source_text
@@ -4538,8 +5625,6 @@ class EmotionMemobase:
                         if not has_scope:
                             rejected_count += 1
                             continue
-                    if operation in {"NOOP", "BLOCK"}:
-                        continue
                     source_turn_id = str(source["turn_id"])
                     evidence_json = [
                         {"turn_id": str(turn["turn_id"])} for turn in evidence_turns
@@ -4549,9 +5634,10 @@ class EmotionMemobase:
                         uuid.NAMESPACE_URL,
                         f"lmca-reflection:{claim['idempotency_key']}:{index}:{content}",
                     ).hex
-                    if not conn.execute(
-                        f"SELECT 1 FROM {_MEMORY_ITEM_TABLE} WHERE item_id=?", (item_id,)
-                    ).fetchone():
+                    existing = conn.execute(
+                        f"SELECT status FROM {_MEMORY_ITEM_TABLE} WHERE item_id=?", (item_id,)
+                    ).fetchone()
+                    if not existing:
                         self._insert_memory_item(
                             conn,
                             patient_id,
@@ -4573,9 +5659,30 @@ class EmotionMemobase:
                                 "suggested_operation": operation,
                                 "evidence_quote": quote,
                             },
+                            supersedes_item_id=(
+                                str(candidate.get("supersedes_item_id") or "").strip() or None
+                            ),
                         )
+                        candidate_item_ids.append(item_id)
+                    elif str(existing["status"]) == "candidate":
+                        candidate_item_ids.append(item_id)
                     candidate_count += 1
+                if safety_failure:
+                    raise ValueError("reflection candidate failed safety validation")
+            if self._auto_verify_reflections and candidate_item_ids:
+                verification = self._verify_candidates(patient_id, candidate_item_ids, turns)
+            with self._lock, self._connection() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if not self._reflection_claim_is_current(
+                    conn, patient_id, session_id, lease_token
+                ):
+                    return {
+                        "status": "stale",
+                        "patient_id": patient_id,
+                        "session_id": session_id,
+                    }
                 now = _now()
+                self._mark_reflection_turns_complete(conn, patient_id, session_id)
                 conn.execute(
                     f"""UPDATE {_SESSION_REFLECTION_TABLE}
                         SET status='succeeded', session_summary=?, summary_evidence_json=?,
@@ -4602,7 +5709,73 @@ class EmotionMemobase:
             "session_id": session_id,
             "candidate_count": candidate_count,
             "rejected_count": rejected_count,
+            "verification_status": verification["status"],
+            "confirmed_count": verification["confirmed_count"],
+            "verification_rejected_count": verification["rejected_count"],
         }
+
+    def run_reflection_task(self, task: Mapping[str, Any]) -> dict[str, Any]:
+        """Execute a task already claimed by the persistent worker."""
+        claimed = dict(task)
+        claimed["claimed"] = True
+        return self.reflect_session(
+            str(claimed.get("patient_id") or ""),
+            str(claimed.get("session_id") or ""),
+            _claimed_lease=claimed,
+        )
+
+    def _memory_worker_loop(self) -> None:
+        while not self._memory_worker_stop.is_set():
+            try:
+                tasks = self.claim_due_reflection_tasks()
+                for task in tasks:
+                    if self._memory_worker_stop.is_set():
+                        break
+                    try:
+                        self.run_reflection_task(task)
+                    except Exception as exc:
+                        token = str(task.get("lease_token") or "")
+                        self._fail_session_reflection(
+                            str(task.get("patient_id") or ""),
+                            str(task.get("session_id") or ""),
+                            exc,
+                            token,
+                        )
+                self._process_due_mirror_ops()
+            except Exception as exc:
+                self._log(f"[EmotionMemory] worker error: {type(exc).__name__}")
+            self._memory_worker_wakeup.wait(_MEMORY_WORKER_INTERVAL)
+            self._memory_worker_wakeup.clear()
+
+    def _process_due_mirror_ops(self) -> None:
+        with self._lock, self._connection() as conn:
+            patients = conn.execute(
+                f"""SELECT DISTINCT patient_id FROM {_MIRROR_OP_TABLE}
+                    WHERE (status IN ('pending','failed')
+                           AND (next_retry_at IS NULL OR next_retry_at<=?))
+                       OR (status='running' AND lease_until<=?) LIMIT 20""",
+                (_now(), _now()),
+            ).fetchall()
+        for row in patients:
+            self._process_mirror_ops_impl(str(row["patient_id"]))
+
+    def start_memory_worker(self) -> None:
+        with self._memobase_lock:
+            if self._memory_worker_thread and self._memory_worker_thread.is_alive():
+                return
+            self._memory_worker_stop.clear()
+            self._memory_worker_thread = threading.Thread(
+                target=self._memory_worker_loop, name="emotion-memory-worker", daemon=True
+            )
+            self._memory_worker_thread.start()
+
+    def stop_memory_worker(self, timeout: float = 5.0) -> None:
+        self._memory_worker_stop.set()
+        self._memory_worker_wakeup.set()
+        thread = self._memory_worker_thread
+        if thread and thread is not threading.current_thread():
+            thread.join(timeout=max(0.1, float(timeout)))
+        self._memory_worker_thread = None
 
     def _replay_unsynced_impl(self, patient_id: str, force: bool = False) -> bool:
         if not force:
@@ -4666,6 +5839,7 @@ class EmotionMemobase:
         return self._replay_unsynced_impl(patient_id, True)
 
     def close(self) -> None:
+        self.stop_memory_worker()
         with self._memobase_lock:
             if self._memobase_executor is not None:
                 self._memobase_executor.shutdown(wait=False, cancel_futures=True)

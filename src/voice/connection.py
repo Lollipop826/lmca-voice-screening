@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -16,6 +17,8 @@ _OUTPUT_IDENTITY_EVENT_TYPES = {
     "tts_stop",
     "stop_tts",
     "interrupt",
+    "avatar_video",
+    "avatar_video_error",
 }
 _OUTPUT_START_EVENT_TYPES = {
     "tts_start",
@@ -23,20 +26,72 @@ _OUTPUT_START_EVENT_TYPES = {
 
 
 class VoiceConnectionController:
-    """Receive normalized messages and dispatch them until disconnect or stop."""
+    """Receive messages while keeping interruption/audio responsive."""
 
     def __init__(self, connection, router) -> None:
         self.connection = connection
         self.router = router
 
     async def run(self) -> None:
-        while True:
-            message = await self.connection.receive_message()
-            if message is None:
-                return
-            route_result = await self.router.dispatch(message)
-            if route_result.stop_connection:
-                return
+        normal_lock = asyncio.Lock()
+        audio_lock = asyncio.Lock()
+        stop_event = asyncio.Event()
+        active_tasks: set[asyncio.Task] = set()
+        errors: list[Exception] = []
+
+        async def dispatch_message(message: dict) -> None:
+            try:
+                message_type = message.get("type")
+                if message_type == "interrupt":
+                    route_result = await self.router.dispatch(message)
+                elif message_type == "audio":
+                    async with audio_lock:
+                        route_result = await self.router.dispatch(message)
+                else:
+                    async with normal_lock:
+                        route_result = await self.router.dispatch(message)
+                if route_result.stop_connection:
+                    stop_event.set()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                errors.append(exc)
+                stop_event.set()
+
+        try:
+            while True:
+                receive_task = asyncio.create_task(
+                    self.connection.receive_message()
+                )
+                stop_task = asyncio.create_task(stop_event.wait())
+                done, _ = await asyncio.wait(
+                    {receive_task, stop_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if stop_task in done and stop_event.is_set():
+                    receive_task.cancel()
+                    await asyncio.gather(receive_task, return_exceptions=True)
+                    break
+                stop_task.cancel()
+                await asyncio.gather(stop_task, return_exceptions=True)
+                message = receive_task.result()
+                if message is None:
+                    break
+                task = asyncio.create_task(dispatch_message(message))
+                active_tasks.add(task)
+                task.add_done_callback(active_tasks.discard)
+                await asyncio.sleep(0)
+                if stop_event.is_set():
+                    break
+        finally:
+            for task in active_tasks:
+                if not task.done():
+                    task.cancel()
+            if active_tasks:
+                await asyncio.gather(*active_tasks, return_exceptions=True)
+
+        if errors:
+            raise errors[0]
 
 
 class VoiceConnectionIO:
@@ -51,6 +106,8 @@ class VoiceConnectionIO:
         "tts_end",
         "speaker_error",
         "processing_status",
+        "avatar_video",
+        "avatar_video_error",
         "update_score",
     }
 
@@ -255,10 +312,13 @@ class VoiceConnectionIO:
             if text:
                 message = json.loads(text)
                 if message.get("type") == "audio" and "data" in message:
-                    audio_data = np.asarray(message["data"], dtype=np.int16)
-                    message["_audio_float"] = (
-                        audio_data.astype(np.float32) / 32768.0
-                    )
+                    audio_data = np.asarray(message["data"])
+                    if np.issubdtype(audio_data.dtype, np.floating):
+                        message["_audio_float"] = audio_data.astype(np.float32)
+                    else:
+                        message["_audio_float"] = (
+                            audio_data.astype(np.float32) / 32768.0
+                        )
                 return message
 
     async def send_json(self, data: dict[str, Any]) -> bool:

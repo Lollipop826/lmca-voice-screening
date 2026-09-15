@@ -1,0 +1,407 @@
+#!/usr/bin/env python3
+"""Build the editable Chinese report and matching Markdown from frozen evidence.
+
+Run with the bundled Codex artifact Python (python-docx is required). No API,
+service, or production database access. Re-running does not change study data.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import re
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_STUDY = ROOT / 'output/ablation_study_20260913'
+DEFAULT_DOCX = ROOT / 'output/reports/语音陪伴系统受控消融实验报告20260913.docx'
+DEFAULT_MD = ROOT / 'docs/controlled_ablation_report_20260913.md'
+
+
+def content(study_dir):
+    a = json.loads((study_dir / 'analysis.json').read_text())
+    audit = json.loads((study_dir / 'audit.json').read_text())
+    wait = json.loads((study_dir / 'wait_policy_microbenchmark.json').read_text())
+    plan = json.loads((study_dir / 'plan.json').read_text())
+    blocks = []
+
+    def add(kind, text='', **kwargs):
+        blocks.append({'kind': kind, 'text': text, **kwargs})
+
+    def table(headers, rows, widths, note=None, numeric=()):
+        add('table', headers=headers, rows=rows, widths=widths, numeric=numeric)
+        if note:
+            add('note', note)
+
+    def effect(value):
+        return f"{value['mean']:+.4f}"
+
+    def ci(value):
+        return f"[{value['ci95'][0]:.4f}, {value['ci95'][1]:.4f}]"
+
+    def chapter(text):
+        add('page')
+        add('h1', text)
+
+    add('title', '语音陪伴系统\n受控消融实验报告')
+    add('subtitle', '记忆与文本情绪提示干预及缓存等待微基准')
+    add('meta', '实验日期 2026年9月13日    编制 Codex    面向 项目组')
+    add('p', '本轮实测回答两个问题：历史记忆和文本情绪标签是否改变陪伴回复，以及缓存、预取和等待预算如何影响最终问题到来后的记忆等待。实验复用了项目提示词和调度代码，回复由真实云端模型生成。')
+    add('p', '**结论：尚不能证明记忆与情绪模块带来了稳定的回答质量提升。** 记忆在相关场景中只有很小的正向分差，文本情绪没有正向收益；裁判评分严重集中在满分，且发现证据引用错位。缓存和预取的收益仅在模拟检索延迟下得到验证。')
+    add('bullet', '**记忆效果偏弱。** 相关场景连续性提高 0.0417 分，18 个场景中 16 个持平；无关或更新场景的克制性下降 0.0833 分。')
+    add('bullet', '**先改善评测再扩大实验。** 97.96% 的评分项为满分；不能把接近 5 分解释为系统已可靠，更不能据此宣布零幻觉。')
+    add('bullet', '**预取需要条件。** 提前 200 ms 且最终问题匹配时，上下文返回率由冷缓存的 66.7% 升至 100%；问题变化后仍需重新检索。')
+    table(['完成项目', '本次结果'], [
+        ['独立场景与生成', '30 个虚构场景，6 组，2 次生成，共 360 条回复'],
+        ['盲评', '120 个有效任务；123 次有记录的调用，3 次格式错误后重试成功'],
+        ['调度微基准', '30 组模拟延迟，8 种策略，共 240 次'],
+        ['验证', f"51 项自动化测试通过；{len(audit['integrity_checks_passed'])} 项证据一致性检查通过"],
+    ], [1.55, 5.35])
+    add('p', '**范围边界：** 本轮没有完成真实语音、多模态情绪、Memobase 语义检索或用户体验验证。未重启服务、未修改线上配置，也未读写真实患者数据。')
+
+    chapter('1 实验边界与分组设计')
+    add('p', '执行时主服务 https://127.0.0.1:8427/health 可访问；本机 SoulX 8001 与 Memobase 18019 健康接口不可达。情绪评测清单有 50 条 mock 记录，但没有可用音频。因此本轮改为提示词边界的受控实验，不冒充原计划中的完整语音实验。')
+    add('note', '主服务健康状态报告 SQLite 为记忆后端且工作线程就绪。Memobase 不可达不等于所有记忆功能不可用；本轮仅未验证其语义召回链路，也未访问线上 SQLite 内容。')
+    table(['实验组', '记忆输入', '情绪输入'], [
+        ['M0E0', '不注入历史记忆', '固定 neutral 占位符'],
+        ['M1E0', '按场景人工选定的两条历史', '固定 neutral 占位符'],
+        ['M0E1', '不注入历史记忆', '项目文本规则分类器的标签'],
+        ['M1E1', '按场景人工选定的两条历史', '项目文本规则分类器的标签'],
+        ['MrecentE0', '时间最近但与当前问题无关的两条历史', '固定 neutral 占位符'],
+        ['M1Eref', '按场景人工选定的两条历史', '场景作者指定的参考情绪'],
+    ], [1.1, 2.95, 2.85], 'M1 是受控上下文注入，不是实际检索结果；E1 不是 Emotion2Vec。E0 保留了生产提示词的情绪字段，不是删除字段。Eref 仅用于诊断，不是音频标注金标准或能力上限。')
+    add('h2', '场景构成')
+    table(['类型', '数量', '检查重点'], [
+        ['跨会话追问', '6', '用户只说上次那件事，是否能合理衔接'],
+        ['无关实际问题', '6', '不应把旧事硬塞进煮面等日常回答'],
+        ['事实更新与拒绝', '6', '当前纠正或边界应优先于旧记忆'],
+        ['显式情绪', '6', '承接清楚表达的高兴、害怕或难过'],
+        ['隐式情绪', '6', '面对含糊表达不过度解读或武断读心'],
+    ], [1.55, .55, 4.8], numeric=(1,))
+    add('p', '所有场景、历史事件和人物标识均为虚构。预先标记的记忆相关场景共 18 个；无关及更新负例共 12 个。各组使用同一系统提示词、空个人档案与空短期对话；记忆写入关闭。记忆组都最多注入两条、共 240 字符，但未严格匹配 token 数。')
+
+    chapter('2 统计方法与主要结果')
+    add('p', '主实验前冻结了方案、场景和关键源码快照。先在每条回复内平均两次同模型裁判评分，再在同一场景内平均两次生成。独立统计单位为 30 个 sample_id，不是 360 条回复、120 次裁判或 720 个评分对象。')
+    add('p', '记忆主效应取“有记忆减无记忆”在两种情绪设置下的平均；情绪主效应同理。交互效应取两种记忆条件下情绪效应的差。对原始场景做 10,000 次 bootstrap，给出探索性的、未作多重比较校正的 95% 区间；不报告确认性显著结论。')
+    primary = a['primary_endpoints']
+    table(['预先冻结的主要终点', '场景数', '分差', '95% 区间'], [
+        ['记忆对相关场景连续性的影响', '18', effect(primary['memory_continuity_relevant']), ci(primary['memory_continuity_relevant'])],
+        ['文本情绪对全部场景情绪适配的影响', '30', effect(primary['text_emotion_fit_all']), ci(primary['text_emotion_fit_all'])],
+        ['记忆对负例场景克制性的影响', '12', effect(primary['memory_restraint_negative_controls']), ci(primary['memory_restraint_negative_controls'])],
+    ], [3.0, .6, .85, 2.45], '分数越高越好，量表为 1 至 5 分。区间仅反映这批虚构场景的重采样变化，不代表真实用户群体或标注误差。', numeric=(1, 2, 3))
+    add('p', '连续性终点中，2 个场景为正、16 个持平；情绪终点中，1 个场景为负、29 个持平。克制性终点中，3 个为负、9 个持平。三项主要终点的区间均包含零，因此本轮不能据此确认收益，也不能推断情绪功能没有价值。')
+    add('h2', '六组平均评分')
+    dims = ['grounding', 'continuity', 'emotion_fit', 'restraint', 'helpfulness', 'safety']
+    table(['组别', '事实', '连续', '情绪', '克制', '帮助', '安全'],
+          [[cond, *[f"{a['condition_means'][cond][d]:.3f}" for d in dims]] for cond in plan['configuration']['conditions']],
+          [1.14, .96, .96, .96, .96, .96, .96],
+          '分数是案例内重复平均后的裁判均值。“安全”仅指本题库中的模型评分，不是临床安全性或高风险危机处置验证。', numeric=(1, 2, 3, 4, 5, 6))
+    add('p', '**最重要的限制是量表饱和。** 4,320 个单项评分中 4,232 个为 5 分，720 个评分对象中 676 个六项全满分。组间极小的数值差不宜作为上线、删模块或发表效果结论的依据。')
+
+    chapter('3 记忆选择与情绪信号诊断')
+    contrast_rows = []
+    for label, name, dimension in [
+        ('人工相关记忆减最近记忆  连续性', 'curated_minus_recent', 'continuity'),
+        ('人工相关记忆减最近记忆  帮助性', 'curated_minus_recent', 'helpfulness'),
+        ('作者情绪减文本情绪  情绪适配', 'reference_minus_text_emotion', 'emotion_fit'),
+        ('记忆与情绪交互  连续性', 'interaction', 'continuity'),
+        ('记忆与情绪交互  帮助性', 'interaction', 'helpfulness'),
+    ]:
+        value = a['contrasts'][name][dimension]
+        contrast_rows.append([label, effect(value), ci(value)])
+    table(['探索性对比', '分差', '95% 区间'], contrast_rows, [3.6, .85, 2.45],
+          '均基于 30 个场景。多终点探索不作确认性推断；不能挑选区间不跨零的一项单独宣称方法已被证明。', numeric=(1, 2))
+    add('h2', '选择相关记忆有方向性信号')
+    add('p', '人工选择的记忆比简单采用最近两条历史，在帮助性上高 0.0500 分；但效应很小，裁判又存在满分和证据错位问题。更稳妥的结论是保留相关性过滤和无关负例，而不是宣称语义检索质量已改善。')
+    add('p', '事后用审计脚本列出的历史关键词检查 6 个追问场景：M1E0、M1E1、M1Eref 均有 6/12 条回复提及至少一个锚词，无记忆及最近记忆组均为 0/12。这只说明注入的历史有时进入了回复；关键词会漏掉改写，提及旧事也不等于回答更好。')
+    add('h2', '无证据的文本标签不应被当作确定情绪')
+    add('p', '30 条文本中有 21 条得到近乎均匀的七类分布。由于浮点归一化将极小残差加到最后一类，实验中的 argmax 全部将这 21 条选成 confusion。这不是“识别出了困惑”，而是缺少可区分信号时仍被强行输出标签。')
+    add('p', '其余 9 条存在非均匀规则信号。该审计针对本题库和标签提取路径，不是音频分类准确率，也不能直接推广到全部线上情绪路径。下一步应验证近均匀分布回退为未知或 neutral，并单独覆盖否定词与隐含表达。')
+    add('h2', '参考标签没有形成可测的质量增益')
+    add('p', 'M1Eref 与 M1E1 的情绪适配都为满分，差值和区间均为零。由于参考标签出自场景作者、语句本身有歧义，且评分已饱和，这不能说明正确的语音情绪没有价值，也不能证明系统达到了多模态能力上限。')
+
+    chapter('4 裁判可靠性与负例核查')
+    add('p', '以下为执行助手依据原始回复、标签映射和裁判理由完成的事后核查，不是独立人类标注。例子用于说明机制和评测缺口，不用于估计总体发生率；原始评分未被事后修改。')
+    add('h2', '裁判把另一条回复的文字作为扣分依据')
+    add('p', '在 followup-05 第 2 次生成的第 1 次盲评中，MrecentE0 对应标签 D。它只祝贺任务完成并问“今晚打算怎么奖励一下自己”，没有提到花架。裁判却引用“是终于动手整理阳台花架了吗？”作为事实推断风险的依据；该句实际出现在 M1Eref。')
+    add('p', '**影响：** 这是一处可核对的跨回复证据错位。即使盲化映射与文件哈希全部正确，裁判仍可能混淆同屏候选内容。后续应要求证据为当前候选的原文片段，并用独立候选评分或交换顺序的成对比较复核。')
+    add('h2', '文字确认不等于记忆真正写入')
+    add('p', 'update-15 要求把散步时间改到周五下午。本实验明确关闭记忆写入，但 12 条回复中有 5 条出现“已更新”或“已经更新”等动作完成措辞。例如 M0E1 第 1 次回复是“收到，已经更新日程了。以后周五下午散步，周三上课。”')
+    add('p', '这条回复的两次裁判均给六项满分；整个场景有 21/24 个评分对象六项全满分。应把“正确理解新时间”与“成功保存到持久存储”分开验收。上述措辞不能作为写库成功的证据，也不能据此认定线上一定发生了错误写入。')
+    add('h2', '不相关的旧事会打断陪伴回应')
+    add('p', 'implicit_emotion-25 中，用户说“算了，你们忙吧，我一个人也一样”。MrecentE0 第 1 次回复在回应失落后转向“那个浅色水杯还摆在桌上吗？要是无聊了，可以给它拍张照看看。”这说明最近发生的真实历史仍可能与当前需要无关。')
+    add('p', '全部场景中，MrecentE0 的“无关记忆”裁判标记为 6/120，即 5.0%；M1E0 为 0/120。这是重复评分的标记比例，不是经人工确认的事件发生率。参考上一处错位，所有自动标记都应保留原文证据。')
+    add('h2', '安全和边界指标还需单独加强')
+    add('p', '文本中也出现“身体在提醒你需要换个节奏”等过度解释，以及“温水……助眠”等未经本实验验证的健康表述。当前题库没有覆盖危机处置、长期依赖或临床结局；零内部标签泄露标记不能替代完整安全评估。')
+
+    chapter('5 缓存预取与等待预算微基准')
+    add('p', '本部分调用真实 RetrievalCache、RealtimeTurn._maybe_prefetch 和 memory_for_final，但检索后端只做可控 sleep。共 30 组延迟：80、200、400 ms 三档各 10 组，每组加入 ±10% 抖动；同组八种策略使用相同延迟、随机执行顺序。')
+    names = {
+        'no_cache_250': '关闭缓存', 'cold_cache_250': '冷缓存', 'warm_cache_250': '已预热缓存',
+        'prefetch_match_250': '预取且最终问题匹配', 'prefetch_changed_query_250': '预取后最终问题变化',
+        'cold_cache_100': '冷缓存短预算', 'cold_cache_500': '冷缓存长预算',
+        'prefetch_match_100': '匹配预取短预算',
+    }
+    rows = []
+    for name, stats in wait['summary'].items():
+        rows.append([names[name], str(wait['policies'][name]['budget_ms']),
+                     f"{stats['p50_wait_ms']:.2f}", f"{stats['p95_wait_ms']:.2f}",
+                     f"{stats['context_return_rate']:.1%}", f"{stats['mean_measured_loader_calls']:.0f}"])
+    table(['策略', '预算\nms', 'P50\nms', 'P95\nms', '上下文\n返回率', '平均加载\n次数'], rows,
+          [2.0, .75, .85, .85, 1.25, 1.2],
+          '每策略 30 次。P50 为中位数，P95 为最近秩法。加载次数包含本轮预取，不含单独预热；计时从进入 memory_for_final 开始。', numeric=(1, 2, 3, 4, 5))
+    add('p', '**预取条件是人为设定的。** 稳定 partial 已满足生产代码的 350 ms 门槛，并在最终文本前 200 ms 触发；这通过构造历史时间戳实现，不是从录音测得。预热、稳定等待和提前量都不计入表中的最终等待。')
+    add('bullet', '仅开启冷缓存没有明显收益：P50 与关闭缓存均约 198 ms，返回率同为 66.7%。真正的命中或提前执行才减少最终等待。')
+    add('bullet', '匹配预取在此延迟分布下将 P95 从冷缓存的 250.44 ms 降至 207.30 ms，同时返回率达到 100%。这些数值不能当作真实端到端加速。')
+    add('bullet', '最终问题变化的 30 次试验没有返回旧问题的上下文，但每轮平均启动两次加载。应在真实流量中同时看正确性、预取浪费和后端负载。')
+    add('bullet', '100 ms 冷缓存预算只返回 33.3% 的上下文；500 ms 达到 100%，但 P95 增至 407.64 ms。等待更短不必然体验更好，需与记忆缺失代价共同衡量。')
+    add('p', '240 次均未观察到错误问题的上下文返回。这是当前构造的查询变化测试结果，不是并发、取消、TTL、故障恢复或全部语义改写的完整证明。')
+
+    chapter('6 局限与下一轮实验建议')
+    add('h2', '本轮不能支持的结论')
+    add('p', '虚构场景只有 30 个，隐式情绪含作者假设；没有真实用户或独立人类裁判。生成模型与裁判均来自同一模型家族，两次裁判只是同模型复评。注入记忆不等于语义召回，关键词提及不等于有效帮助；短对话分数不代表长期陪伴效果。')
+    add('p', '模拟检索延迟没有覆盖真实网络、GPU 竞争、ASR、SoulX、Emotion2Vec、流式 LLM、TTS 或浏览器播放。云模型接口未固定生成随机种子，调度种子只控制顺序与盲化；因此新一轮生成不能保证逐字复现。')
+    add('h2', '优先修复评测与状态确认')
+    add('bullet', '**裁判校准优先。** 用故意捏造历史、忽略当前纠正、越过拒绝边界和伪称保存成功的锚定样本校验量表。要求给出当前候选中的逐字证据，并单独核对引用归属；再引入独立人工复核。')
+    add('bullet', '**情绪不确定性回退。** 对近均匀或低置信分布保留“不确定”，不要直接 argmax 成一个看似确定的标签。固定修复前后的版本，另开输出目录做回归，不能改写这次基线。')
+    add('bullet', '**记忆动作与语言分开。** 只有写入工具明确成功，才允许表达“已保存”；否则仅确认本轮理解。对保存、更新、删除分别做结果回读与错误路径测试。')
+    add('h2', '恢复依赖后补齐真实链路')
+    table(['后续实验', '必须补充的测量'], [
+        ['真实记忆检索', '隔离测试用户和数据库；无记忆、最近记录、语义检索、打乱记忆对照；检查事实召回、当前纠正、删除传播及版本失效'],
+        ['音频与多模态情绪', '具有使用权限的真实音频与独立标注；按说话人划分数据；比较文本、音频及融合，并单报拒识与不确定性'],
+        ['在线语音调度', '恢复 SoulX 后记录最后语音、ASR final、LLM 首 token、首音频与客户端播放；同时报 P50、P95、超时率和上下文可用率'],
+    ], [1.45, 5.45])
+    add('p', '建议先完成裁判校准与明确的状态断言，再在隔离环境补跑真实检索和音频。现有结果不足以支持直接改线上等待预算或移除情绪模块；本次未执行这些配置变更。')
+
+    chapter('7 执行记录与复现方式')
+    table(['参数或记录', '本次取值'], [
+        ['生成模型', 'DashScope qwen3.7-flash；temperature 0.65；max_tokens 240'],
+        ['盲评模型', 'DashScope qwen-flash；temperature 0；max_tokens 2600'],
+        ['重复与并发', '每组生成 2 次；每条回复评 2 次；最大并发 4'],
+        ['调度种子与超时', '20260913；模型请求超时 40 s；生成随机种子未设置'],
+        ['运行记录', '北京时间 16:20 至 16:26；360 条生成完成，0 条最终失败或截断'],
+        ['裁判与 token', '120 个任务完成；3 次 JSON 格式错误后重试；总 token 382,904'],
+        ['版本', f"Git {plan['git_head'][:7]} 加当前未提交工作树；关键源码另存快照"],
+        ['验证记录', '51 项测试通过；26 项离线证据检查通过；原始计划和评分保留'],
+    ], [1.55, 5.35])
+    add('note', 'token 为主生成与裁判日志之和，包含裁判格式重试，不含连通性冒烟调用；未估算费用。有记录的裁判调用为 123 次，不保证等于客户端内部所有网络传输次数。生成环境为 Python 3.11.15，测试及微基准环境为 Python 3.11.16。')
+    add('p', '各组平均回复长度 47.82 至 54.28 字符，均未超过 120 字符。非流式完整 HTTP 回复耗时的组内中位数为 1.27 至 1.40 秒，仅供执行诊断；它不是首 token、首音频或用户感知延迟，也没有隔离云端排队因素。')
+    add('h2', '不调用模型的复查命令')
+    add('code', '/data/luyang/envs/lmca/bin/python \\\n  /data/luyang/lmca-share/scripts/run_controlled_ablation.py analyze\n/data/luyang/envs/lmca/bin/python \\\n  /data/luyang/lmca-share/scripts/audit_controlled_ablation.py')
+    add('p', '重新生成请使用 run_controlled_ablation.py all，并指定新的 --output 目录；默认参数与冻结方案一致。复跑微基准用 benchmark_ablation_wait_policy.py，同样指定新目录以保留本次计时。上述两个脚本位于 /data/luyang/lmca-share/scripts/。')
+    add('h2', '证据与报告源码')
+    add('path', str(study_dir))
+    add('p', '目录包含 plan.json、generations.jsonl、judgements.jsonl、blinding_keys.json、analysis.json、audit.json、wait_policy_microbenchmark.json、environment_preflight.json，以及两份关键源码快照目录。完整 SHA256 在计划与审计文件中；证据包另附逐文件校验清单。')
+    add('path', str(ROOT / 'scripts/build_controlled_ablation_report.py'))
+    add('path', str(ROOT / 'tests/test_controlled_ablation_study.py'))
+    add('path', str(ROOT / 'tests/test_ablation_wait_policy_and_audit.py'))
+    add('note', '生成本报告应使用 bundled artifact Python 的 python-docx 环境。实验脚本可断点续跑，已成功的生成和裁判任务不会重复调用；分析和审计不会请求云模型。')
+    return blocks
+
+
+def write_markdown(blocks, path):
+    lines = []
+    for b in blocks:
+        kind, text = b['kind'], b['text']
+        if kind == 'title':
+            lines += ['# ' + text.replace('\n', ''), '']
+        elif kind == 'subtitle':
+            lines += [text, '']
+        elif kind in ('h1', 'h2'):
+            lines += [('## ' if kind == 'h1' else '### ') + text, '']
+        elif kind == 'bullet':
+            lines += ['- ' + text]
+        elif kind == 'page':
+            lines += ['', '<!-- page break in the Word report -->', '']
+        elif kind == 'table':
+            clean = lambda v: str(v).replace('\n', '<br>').replace('|', '\\|')
+            lines += ['', '| ' + ' | '.join(map(clean, b['headers'])) + ' |',
+                      '| ' + ' | '.join(['---'] * len(b['headers'])) + ' |']
+            lines += ['| ' + ' | '.join(map(clean, row)) + ' |' for row in b['rows']]
+            lines += ['']
+        elif kind == 'code':
+            lines += ['```bash', text, '```', '']
+        elif kind == 'path':
+            lines += ['`' + text + '`', '']
+        else:
+            lines += ['', text, '']
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('\n'.join(lines).strip() + '\n', encoding='utf-8')
+
+
+def write_docx(blocks, path):
+    from docx import Document
+    from docx.enum.table import WD_TABLE_ALIGNMENT, WD_CELL_VERTICAL_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    from docx.shared import Inches, Pt, RGBColor
+
+    doc = Document()
+    sec = doc.sections[0]
+    sec.page_width, sec.page_height = Inches(8.5), Inches(11)
+    sec.left_margin = sec.right_margin = Inches(.8)
+    sec.top_margin, sec.bottom_margin = Inches(.72), Inches(.70)
+    sec.footer_distance = Inches(.30)
+
+    def font(style, size, color='000000', bold=False):
+        style.font.name = 'Noto Sans CJK SC'
+        style.font.size = Pt(size)
+        style.font.bold = bold
+        style.font.italic = False
+        style.font.color.rgb = RGBColor.from_string(color)
+        rpr = style.element.get_or_add_rPr()
+        rfonts = rpr.find(qn('w:rFonts'))
+        if rfonts is None:
+            rfonts = OxmlElement('w:rFonts'); rpr.insert(0, rfonts)
+        for part in ('ascii', 'hAnsi', 'eastAsia', 'cs'):
+            rfonts.set(qn('w:' + part), 'Noto Sans CJK SC')
+        color_el = rpr.find(qn('w:color'))
+        if color_el is not None:
+            for attr in ('themeColor', 'themeTint', 'themeShade'):
+                color_el.attrib.pop(qn('w:' + attr), None)
+
+    for name, size, bold in [('Normal', 11, False), ('Title', 25, True),
+                              ('Subtitle', 13, False), ('Heading 1', 16, True),
+                              ('Heading 2', 12, True), ('List Bullet', 11, False)]:
+        font(doc.styles[name], size, bold=bold)
+    normal = doc.styles['Normal'].paragraph_format
+    normal.line_spacing = Pt(16.5)
+    normal.space_after = Pt(6)
+    normal.widow_control = True
+    for name in ('Heading 1', 'Heading 2'):
+        fmt = doc.styles[name].paragraph_format
+        fmt.space_before = Pt(10 if name == 'Heading 2' else 0)
+        fmt.line_spacing = Pt(18 if name == 'Heading 2' else 23)
+        fmt.space_after = Pt(7)
+        fmt.keep_with_next = True
+    doc.styles['Title'].paragraph_format.space_after = Pt(10)
+    doc.styles['Title'].paragraph_format.line_spacing = Pt(35)
+    doc.styles['Subtitle'].paragraph_format.space_after = Pt(8)
+    doc.styles['Subtitle'].paragraph_format.line_spacing = Pt(19)
+    for name in ('Title', 'Subtitle'):
+        ppr = doc.styles[name].element.find(qn('w:pPr'))
+        if ppr is not None:
+            border = ppr.find(qn('w:pBdr'))
+            if border is not None:
+                ppr.remove(border)
+    bullet_fmt = doc.styles['List Bullet'].paragraph_format
+    bullet_fmt.left_indent = Inches(.18)
+    bullet_fmt.first_line_indent = Inches(-.13)
+    bullet_fmt.space_after = Pt(6)
+
+    def inline(paragraph, text, size=None, color=None):
+        for part in re.split(r'(\*\*.*?\*\*)', text):
+            if not part:
+                continue
+            run = paragraph.add_run(part[2:-2] if part.startswith('**') else part)
+            if part.startswith('**'):
+                run.bold = True
+            if size:
+                run.font.size = Pt(size)
+            if color:
+                run.font.color.rgb = RGBColor.from_string(color)
+        return paragraph
+
+    pending_break = False
+    for b in blocks:
+        kind, text = b['kind'], b['text']
+        if kind == 'page':
+            pending_break = True
+            continue
+        if kind == 'table':
+            table = doc.add_table(rows=1, cols=len(b['headers']))
+            table.alignment = WD_TABLE_ALIGNMENT.CENTER
+            table.autofit = False
+            for col, width in zip(table.columns, b['widths']):
+                col.width = Inches(width)
+            prop = table._tbl.tblPr
+            borders = OxmlElement('w:tblBorders')
+            for side in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+                edge = OxmlElement('w:' + side)
+                edge.set(qn('w:val'), 'single'); edge.set(qn('w:sz'), '5')
+                edge.set(qn('w:color'), 'D9D9D9'); borders.append(edge)
+            prop.append(borders)
+            margins = OxmlElement('w:tblCellMar')
+            for side, value in (('top', '60'), ('bottom', '60'), ('left', '105'), ('right', '105')):
+                edge = OxmlElement('w:' + side); edge.set(qn('w:w'), value)
+                edge.set(qn('w:type'), 'dxa'); margins.append(edge)
+            prop.append(margins)
+            for ridx, values in enumerate([b['headers'], *b['rows']]):
+                row = table.rows[0] if ridx == 0 else table.add_row()
+                trpr = row._tr.get_or_add_trPr()
+                trpr.append(OxmlElement('w:cantSplit'))
+                if ridx == 0:
+                    trpr.append(OxmlElement('w:tblHeader'))
+                for cidx, (cell, value, width) in enumerate(zip(row.cells, values, b['widths'])):
+                    cell.width = Inches(width)
+                    cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
+                    shade = OxmlElement('w:shd')
+                    shade.set(qn('w:fill'), '233C50' if ridx == 0 else ('F1F5F8' if ridx % 2 == 0 else 'FFFFFF'))
+                    cell._tc.get_or_add_tcPr().append(shade)
+                    p = cell.paragraphs[0]
+                    p.paragraph_format.space_after = Pt(0)
+                    p.paragraph_format.space_before = Pt(0)
+                    p.paragraph_format.line_spacing = Pt(14)
+                    p.paragraph_format.keep_with_next = False
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER if (ridx == 0 or cidx in b['numeric']) else WD_ALIGN_PARAGRAPH.LEFT
+                    run = p.add_run(str(value)); run.font.size = Pt(10)
+                    if ridx == 0:
+                        run.bold = True; run.font.color.rgb = RGBColor(255, 255, 255)
+            p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(1)
+            p.paragraph_format.space_before = Pt(0)
+            p.paragraph_format.line_spacing = Pt(3)
+            p.add_run().font.size = Pt(2)
+            continue
+        style = {'title': 'Title', 'subtitle': 'Subtitle', 'h1': 'Heading 1', 'h2': 'Heading 2', 'bullet': 'List Bullet'}.get(kind, 'Normal')
+        p = doc.add_paragraph(style=style)
+        if pending_break:
+            p.paragraph_format.page_break_before = True
+            pending_break = False
+        if kind in ('note', 'meta'):
+            inline(p, text, 9.5, '4B5563')
+            p.paragraph_format.space_after = Pt(7)
+            p.paragraph_format.line_spacing = Pt(13.2)
+        elif kind == 'code':
+            inline(p, text, 9.0)
+            p.paragraph_format.line_spacing = Pt(12.5)
+            p.paragraph_format.space_after = Pt(7)
+            p.paragraph_format.keep_together = True
+        elif kind == 'path':
+            inline(p, text, 9.0, '374151')
+            p.paragraph_format.space_after = Pt(4)
+            p.paragraph_format.line_spacing = Pt(12.5)
+        else:
+            inline(p, text)
+    footer = sec.footer.paragraphs[0]
+    footer.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    footer.paragraph_format.space_after = Pt(0)
+    inline(footer, '第 ', 9, '64748B')
+    field = OxmlElement('w:fldSimple'); field.set(qn('w:instr'), 'PAGE')
+    footer._p.append(field)
+    inline(footer, ' 页', 9, '64748B')
+    doc.core_properties.title = '语音陪伴系统受控消融实验报告'
+    doc.core_properties.subject = '记忆与文本情绪提示干预及缓存等待微基准'
+    doc.core_properties.author = 'Codex'
+    doc.core_properties.keywords = '受控消融,记忆,情绪,缓存,探索性实验'
+    doc.core_properties.comments = ''
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc.save(path)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--study-dir', type=Path, default=DEFAULT_STUDY)
+    parser.add_argument('--output-docx', type=Path, default=DEFAULT_DOCX)
+    parser.add_argument('--output-markdown', type=Path, default=DEFAULT_MD)
+    args = parser.parse_args()
+    blocks = content(args.study_dir.resolve())
+    write_markdown(blocks, args.output_markdown.resolve())
+    write_docx(blocks, args.output_docx.resolve())
+    print(args.output_docx.resolve())
+    print(args.output_markdown.resolve())
+    print('Intended pages:', 1 + sum(b['kind'] == 'page' for b in blocks))
+
+
+if __name__ == '__main__':
+    main()

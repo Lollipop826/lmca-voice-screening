@@ -10,6 +10,9 @@ import sqlite3
 import sys
 import tempfile
 import time
+from dotenv import load_dotenv
+
+load_dotenv()
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any

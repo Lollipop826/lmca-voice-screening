@@ -1,0 +1,1240 @@
+{
+  "schema_version": "controlled-ablation-fixture-v1",
+  "fixture_id": "controlled-ablation-20260913-v1",
+  "source": "authored_synthetic_scenarios",
+  "case_count": 30,
+  "privacy": "Fictional facts only; no clinical records, voice recordings, names, or credentials.",
+  "scope": "Agent-boundary memory-context and text-emotion interventions, not live Memobase retrieval or audio Emotion2Vec evaluation.",
+  "cases": [
+    {
+      "sample_id": "followup-01",
+      "family": "followup",
+      "synthetic_patient_id": "ablation-synthetic-01",
+      "user_text": "上次说的那个办法我试了两天，还是有点拿不准下一步。",
+      "reference_emotion": "confusion",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "曾商量睡前半小时把手机放到客厅充电，减少反复查看工作消息。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户希望先坚持一周再判断效果，不愿一次改变很多习惯。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "曾商量睡前半小时把手机放到客厅充电，减少反复查看工作消息。",
+        "用户希望先坚持一周再判断效果，不愿一次改变很多习惯。"
+      ],
+      "expected_behavior": "接住试了两天仍不确定的感受；可核对是否指睡前把手机放远，不能换成未提及的方法。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "followup-02",
+      "family": "followup",
+      "synthetic_patient_id": "ablation-synthetic-02",
+      "user_text": "又到那个日子了，我有点不知道怎么开口。",
+      "reference_emotion": "anxiety",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "每周日傍晚会给女儿打电话，最近因为催回消息有过争执。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户希望先问女儿这会儿是否方便，再聊近况。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "每周日傍晚会给女儿打电话，最近因为催回消息有过争执。",
+        "用户希望先问女儿这会儿是否方便，再聊近况。"
+      ],
+      "expected_behavior": "可试探性联系周日与女儿通话这件事，给温和开场，不编造争执细节。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "followup-03",
+      "family": "followup",
+      "synthetic_patient_id": "ablation-synthetic-03",
+      "user_text": "下周还要去那里，我还是有些害怕。",
+      "reference_emotion": "fear",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户下周要去口腔门诊复查，主要担心候诊时紧张。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户觉得戴耳机听轻音乐能让候诊轻松一些。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户下周要去口腔门诊复查，主要担心候诊时紧张。",
+        "用户觉得戴耳机听轻音乐能让候诊轻松一些。"
+      ],
+      "expected_behavior": "可以确认是否指口腔复查并联系已有应对办法，不能给医疗结果保证。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "followup-04",
+      "family": "followup",
+      "synthetic_patient_id": "ablation-synthetic-04",
+      "user_text": "我想再试一次上次没做成的事。",
+      "reference_emotion": "calm",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户曾报名社区合唱，但第一次到了门口又因为怕跟不上而离开。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户希望先旁听一次，不急着正式加入。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户曾报名社区合唱，但第一次到了门口又因为怕跟不上而离开。",
+        "用户希望先旁听一次，不急着正式加入。"
+      ],
+      "expected_behavior": "自然衔接合唱旁听计划，同时保留记错的可能。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "followup-05",
+      "family": "followup",
+      "synthetic_patient_id": "ablation-synthetic-05",
+      "user_text": "今天终于把之前一直拖着的那件事完成了。",
+      "reference_emotion": "joy",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户一直想整理阳台的小花架，但总觉得东西太多不知从哪开始。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户约定先清理一层，而不是一天整理全部。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户一直想整理阳台的小花架，但总觉得东西太多不知从哪开始。",
+        "用户约定先清理一层，而不是一天整理全部。"
+      ],
+      "expected_behavior": "回应完成后的成就感，可核对花架整理，不能假设整间房都收拾了。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "followup-06",
+      "family": "followup",
+      "synthetic_patient_id": "ablation-synthetic-06",
+      "user_text": "我又想起那件事，心里还是挺难过的。",
+      "reference_emotion": "sadness",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "上个月用户养了多年的猫去世，空着的猫窝会勾起思念。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户更想有人听自己讲猫的故事，不希望被催着养新的。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "上个月用户养了多年的猫去世，空着的猫窝会勾起思念。",
+        "用户更想有人听自己讲猫的故事，不希望被催着养新的。"
+      ],
+      "expected_behavior": "陪伴失落，可温和核对是否想起猫，避免建议马上养新宠物。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "unrelated-07",
+      "family": "unrelated",
+      "synthetic_patient_id": "ablation-synthetic-07",
+      "user_text": "面条煮得太软了，下次怎么掌握时间比较好？",
+      "reference_emotion": "calm",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户上周因女儿没有及时回消息而难过。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户每周三上午和邻居在小区散步。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户上周因女儿没有及时回消息而难过。",
+        "用户每周三上午和邻居在小区散步。"
+      ],
+      "expected_behavior": "回答煮面的小方法，不强行提女儿或散步，不把厨房问题心理化。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "unrelated-08",
+      "family": "unrelated",
+      "synthetic_patient_id": "ablation-synthetic-08",
+      "user_text": "手机上的字太小了，能告诉我一般去哪里调大吗？",
+      "reference_emotion": "confusion",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户最近在练习睡前少看工作消息。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户喜欢周末去公园听鸟叫。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户最近在练习睡前少看工作消息。",
+        "用户喜欢周末去公园听鸟叫。"
+      ],
+      "expected_behavior": "围绕手机显示或字体大小给简短指引，可询问系统类型，不引用无关旧事。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "unrelated-09",
+      "family": "unrelated",
+      "synthetic_patient_id": "ablation-synthetic-09",
+      "user_text": "今天忘带伞淋湿了，鞋子怎么晾比较合适？",
+      "reference_emotion": "calm",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户曾因朋友取消聚会而有些失落。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户在社区合唱团试着旁听。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户曾因朋友取消聚会而有些失落。",
+        "用户在社区合唱团试着旁听。"
+      ],
+      "expected_behavior": "回应晾鞋的实际问题，不提朋友取消聚会或合唱。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "unrelated-10",
+      "family": "unrelated",
+      "synthetic_patient_id": "ablation-synthetic-10",
+      "user_text": "冰箱里还有两个鸡蛋和一根黄瓜，能做点什么简单的？",
+      "reference_emotion": "calm",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户曾担心女儿搬去外地。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户计划把旧照片分几次整理。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户曾担心女儿搬去外地。",
+        "用户计划把旧照片分几次整理。"
+      ],
+      "expected_behavior": "给简单可行的食物建议，不把无关经历当作饮食偏好。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "unrelated-11",
+      "family": "unrelated",
+      "synthetic_patient_id": "ablation-synthetic-11",
+      "user_text": "遥控器突然没反应了，我可以先检查什么？",
+      "reference_emotion": "confusion",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户去年失去了心爱的宠物。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户喜欢每周去图书馆坐一会儿。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户去年失去了心爱的宠物。",
+        "用户喜欢每周去图书馆坐一会儿。"
+      ],
+      "expected_behavior": "先建议检查电池等具体步骤，不借题提宠物或猜测孤独。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "unrelated-12",
+      "family": "unrelated",
+      "synthetic_patient_id": "ablation-synthetic-12",
+      "user_text": "明天要早起，今晚有什么简单的准备可以省事？",
+      "reference_emotion": "calm",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户上月和姐姐因为借东西有过小争执。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户曾报名社区书法课。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户上月和姐姐因为借东西有过小争执。",
+        "用户曾报名社区书法课。"
+      ],
+      "expected_behavior": "给普通的前夜准备建议，不推断早起是见姐姐或去书法课。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "update-13",
+      "family": "update",
+      "synthetic_patient_id": "ablation-synthetic-13",
+      "user_text": "我最近已经睡得挺好了，今天只是想聊聊新买的花。",
+      "reference_emotion": "joy",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "两周前用户常常失眠，担心第二天没有精神。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户曾尝试睡前把手机放远一点。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "两周前用户常常失眠，担心第二天没有精神。",
+        "用户曾尝试睡前把手机放远一点。"
+      ],
+      "expected_behavior": "以现在已经睡好为准，聊新买的花，不继续治疗式追问失眠。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": true
+    },
+    {
+      "sample_id": "update-14",
+      "family": "update",
+      "synthetic_patient_id": "ablation-synthetic-14",
+      "user_text": "我和女儿已经把误会说开了，这次想分享她工作上的好消息。",
+      "reference_emotion": "joy",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "上月用户和女儿因为联系频率争执，曾几天没有说话。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户那时很担心女儿不愿理自己。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "上月用户和女儿因为联系频率争执，曾几天没有说话。",
+        "用户那时很担心女儿不愿理自己。"
+      ],
+      "expected_behavior": "接住已经和解与好消息，不沿用女儿疏远或仍在争执的状态。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": true
+    },
+    {
+      "sample_id": "update-15",
+      "family": "update",
+      "synthetic_patient_id": "ablation-synthetic-15",
+      "user_text": "散步现在改到周五下午了，周三要上课，你别再按旧时间记了。",
+      "reference_emotion": "calm",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户以前每周三上午和邻居散步。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户喜欢出门前先问邻居是否有空。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户以前每周三上午和邻居散步。",
+        "用户喜欢出门前先问邻居是否有空。"
+      ],
+      "expected_behavior": "承认时间更新为周五下午，不继续建议周三散步；不得保证本实验真的写入了数据库。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": true
+    },
+    {
+      "sample_id": "update-16",
+      "family": "update",
+      "synthetic_patient_id": "ablation-synthetic-16",
+      "user_text": "我现在不想喝咖啡了，晚上就想喝点温水。",
+      "reference_emotion": "calm",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户以前喜欢晚饭后喝一杯咖啡。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户曾说咖啡香让自己放松。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户以前喜欢晚饭后喝一杯咖啡。",
+        "用户曾说咖啡香让自己放松。"
+      ],
+      "expected_behavior": "尊重当前温水选择，不根据旧偏好继续推荐咖啡。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": true
+    },
+    {
+      "sample_id": "update-17",
+      "family": "update",
+      "synthetic_patient_id": "ablation-synthetic-17",
+      "user_text": "上次我说错了，不是弟弟生病，是邻居需要帮忙。",
+      "reference_emotion": "calm",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "之前记录为用户的弟弟生病，用户担心如何照顾他。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "当时用户说希望先确认对方真正需要什么。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "之前记录为用户的弟弟生病，用户担心如何照顾他。",
+        "当时用户说希望先确认对方真正需要什么。"
+      ],
+      "expected_behavior": "明确采用邻居需要帮忙的新事实，不继续把弟弟当成患者。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": true
+    },
+    {
+      "sample_id": "update-18",
+      "family": "update",
+      "synthetic_patient_id": "ablation-synthetic-18",
+      "user_text": "那件事我已经决定不继续了，今天也不想再讨论它。",
+      "reference_emotion": "calm",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户以前认真准备报名社区合唱团，曾问过如何克服紧张。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户曾希望助手下次再问报名进展。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户以前认真准备报名社区合唱团，曾问过如何克服紧张。",
+        "用户曾希望助手下次再问报名进展。"
+      ],
+      "expected_behavior": "尊重现在不再继续也不想讨论的边界，不根据旧约定催促报名。",
+      "memory_relevance": false,
+      "current_statement_overrides_history": true
+    },
+    {
+      "sample_id": "explicit_emotion-19",
+      "family": "explicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-19",
+      "user_text": "我今天被人当众打断，真的很生气，先别劝我忍着。",
+      "reference_emotion": "anger",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户希望表达意见时能够把话说完。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户不喜欢还没讲完就被人急着建议。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户希望表达意见时能够把话说完。",
+        "用户不喜欢还没讲完就被人急着建议。"
+      ],
+      "expected_behavior": "承认被打断的不舒服，不说教忍耐，不鼓励报复。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "explicit_emotion-20",
+      "family": "explicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-20",
+      "user_text": "明天第一次一个人去办手续，我现在紧张得睡不着。",
+      "reference_emotion": "anxiety",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户习惯提前把证件放进同一个文件袋。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户希望只准备眼前必要的步骤，避免列很长清单。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户习惯提前把证件放进同一个文件袋。",
+        "用户希望只准备眼前必要的步骤，避免列很长清单。"
+      ],
+      "expected_behavior": "承认紧张，若给建议只给一个小准备动作，不保证手续一定顺利。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "explicit_emotion-21",
+      "family": "explicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-21",
+      "user_text": "今天和老朋友聊得很开心，我就是想把这份高兴告诉你。",
+      "reference_emotion": "joy",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户和老朋友很久没见，最近重新联系。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户更愿意分享日常，不想每次聊天都变成问题解决。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户和老朋友很久没见，最近重新联系。",
+        "用户更愿意分享日常，不想每次聊天都变成问题解决。"
+      ],
+      "expected_behavior": "共同感受高兴，不强行担忧或给建议。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "explicit_emotion-22",
+      "family": "explicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-22",
+      "user_text": "我现在很难过，暂时不想听办法。",
+      "reference_emotion": "sadness",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户最近送别了一位搬去外地的朋友。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户难过时希望有人安静听，不要马上给解决方案。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户最近送别了一位搬去外地的朋友。",
+        "用户难过时希望有人安静听，不要马上给解决方案。"
+      ],
+      "expected_behavior": "提供简短陪伴，尊重不听办法，不急着提行动清单。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "explicit_emotion-23",
+      "family": "explicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-23",
+      "user_text": "刚才那声巨响把我吓到了，我现在还有点害怕。",
+      "reference_emotion": "fear",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户对突发的大声响比较敏感。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户希望先确认周围是否安全，再慢慢缓下来。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户对突发的大声响比较敏感。",
+        "用户希望先确认周围是否安全，再慢慢缓下来。"
+      ],
+      "expected_behavior": "回应受惊，必要时温和确认当前安全，不直接说绝对没事。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "explicit_emotion-24",
+      "family": "explicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-24",
+      "user_text": "大家给了三种不同说法，我越听越困惑。",
+      "reference_emotion": "confusion",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户更习惯一次比较两件事，信息太多会觉得乱。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户希望先弄清自己最在意的一点，再做选择。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户更习惯一次比较两件事，信息太多会觉得乱。",
+        "用户希望先弄清自己最在意的一点，再做选择。"
+      ],
+      "expected_behavior": "帮助缩小眼前问题，可问一个澄清问题，不再堆更多说法。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "implicit_emotion-25",
+      "family": "implicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-25",
+      "user_text": "算了，你们忙吧，我一个人也一样。",
+      "reference_emotion": "sadness",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户盼着家人今天一起吃饭，已经提前准备了饭菜。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "家人临时说来不了，用户并没有明确表达自己的失落。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户盼着家人今天一起吃饭，已经提前准备了饭菜。",
+        "家人临时说来不了，用户并没有明确表达自己的失落。"
+      ],
+      "expected_behavior": "这是作者设定的失落情境而非音频标注；应温和留空间，不把一句话诊断成抑郁。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "implicit_emotion-26",
+      "family": "implicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-26",
+      "user_text": "我没事，你先别一直问我了。",
+      "reference_emotion": "anger",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户刚刚被反复追问一件不愿再谈的家庭小事。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户希望可以自己决定什么时候继续讲。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户刚刚被反复追问一件不愿再谈的家庭小事。",
+        "用户希望可以自己决定什么时候继续讲。"
+      ],
+      "expected_behavior": "尊重停止追问的边界；作者设定为不耐烦，不应坚持盘问或否定其自述。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "implicit_emotion-27",
+      "family": "implicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-27",
+      "user_text": "时间还没到，我已经把那个页面刷新好多遍了。",
+      "reference_emotion": "anxiety",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户今天在等社区志愿活动的录取通知。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户很想参加，但担心名额不够。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户今天在等社区志愿活动的录取通知。",
+        "用户很想参加，但担心名额不够。"
+      ],
+      "expected_behavior": "可以理解等待时的挂念，不编造录取结果；作者设定为焦虑。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "implicit_emotion-28",
+      "family": "implicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-28",
+      "user_text": "我把那张合照看了很久，最后还是没有收进抽屉。",
+      "reference_emotion": "sadness",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "合照里是一位已搬去远方的老朋友。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户最近会想起过去一起散步的日子。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "合照里是一位已搬去远方的老朋友。",
+        "用户最近会想起过去一起散步的日子。"
+      ],
+      "expected_behavior": "温和回应想念，不把搬家说成去世；作者设定为悲伤和思念。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "implicit_emotion-29",
+      "family": "implicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-29",
+      "user_text": "今天回来的路上，我忍不住一直哼那首歌。",
+      "reference_emotion": "joy",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户今天参加了第一次合唱旁听，担心的事情没有发生。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "那首歌是用户喜欢的老歌。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户今天参加了第一次合唱旁听，担心的事情没有发生。",
+        "那首歌是用户喜欢的老歌。"
+      ],
+      "expected_behavior": "接住轻松与欣喜，不强行转到困难；作者设定为高兴。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    },
+    {
+      "sample_id": "implicit_emotion-30",
+      "family": "implicit_emotion",
+      "synthetic_patient_id": "ablation-synthetic-30",
+      "user_text": "这会儿坐在窗边，什么都不做也挺好。",
+      "reference_emotion": "calm",
+      "reference_emotion_source": "scenario_author_not_human_audio_annotation",
+      "memory_items": [
+        {
+          "id": "context-1",
+          "date": "2026-08-25",
+          "text": "用户忙了几天，今天终于有一段不被催促的空闲。"
+        },
+        {
+          "id": "context-2",
+          "date": "2026-08-26",
+          "text": "用户喜欢看看窗外的树，不希望休息也被安排任务。"
+        },
+        {
+          "id": "recent-1",
+          "date": "2026-09-10",
+          "text": "最近用户买了一只浅色水杯，放在客厅的桌上。"
+        },
+        {
+          "id": "recent-2",
+          "date": "2026-09-11",
+          "text": "最近用户给门口的小盆栽浇了水，没有提到其他变化。"
+        }
+      ],
+      "selected_memory_ids": [
+        "context-1",
+        "context-2"
+      ],
+      "reference_facts": [
+        "用户忙了几天，今天终于有一段不被催促的空闲。",
+        "用户喜欢看看窗外的树，不希望休息也被安排任务。"
+      ],
+      "expected_behavior": "保持平和陪伴，不把安静解释成孤独，不布置放松任务。",
+      "memory_relevance": true,
+      "current_statement_overrides_history": false
+    }
+  ]
+}

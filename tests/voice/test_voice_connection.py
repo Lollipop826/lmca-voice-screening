@@ -132,7 +132,7 @@ class VoiceConnectionIOTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
-    def test_text_json_and_legacy_audio_are_normalized(self):
+    def test_text_json_and_legacy_or_float_audio_are_normalized(self):
         async def scenario():
             transport = _FakeTransport(
                 [
@@ -143,6 +143,10 @@ class VoiceConnectionIOTests(unittest.TestCase):
                     {
                         "type": "websocket.receive",
                         "text": json.dumps({"type": "audio", "data": [0, 32767]}),
+                    },
+                    {
+                        "type": "websocket.receive",
+                        "text": json.dumps({"type": "audio", "data": [0.0, 0.5]}),
                     },
                 ]
             )
@@ -156,6 +160,11 @@ class VoiceConnectionIOTests(unittest.TestCase):
             np.testing.assert_allclose(
                 legacy_audio["_audio_float"],
                 np.array([0.0, 32767 / 32768], dtype=np.float32),
+            )
+            float_audio = await connection.receive_message()
+            np.testing.assert_allclose(
+                float_audio["_audio_float"],
+                np.array([0.0, 0.5], dtype=np.float32),
             )
 
         asyncio.run(scenario())

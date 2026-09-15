@@ -15,10 +15,14 @@ venv/
 ENV/
 env/
 
-# Secrets
+# Secrets and machine-specific credentials
+# Keep only the checked-in configuration templates. Files such as .env.local,
+# .env.production and timestamped .env backups can contain real API keys.
 .env
-.env.storage
-.env.cloudflare
+.env.*
+!.env.example
+!.env.cloudflare.example
+certs/
 
 # OS / IDE
 .DS_Store
@@ -60,6 +64,11 @@ kb/**/.chroma*/
 # Backups / editor artifacts
 *.bak
 *_backup.*
+*.before-*
+*.before_*
+*.backup_*
+*.orig
+*.save
 
 # Demo audio assets (local only)
 static/audio/
@@ -81,8 +90,25 @@ delivery/
 # Frontend dependencies
 **/node_modules/
 
+# Local frontend build/export copy; the source lives in
+# lmca-frontend/frontend/ and the served app lives in root static/.
+/lmca-frontend/static/
+/lmca-frontend/文件清单.txt
+
 # Generated root output
 output/
+
+# Local benchmark probes and audio fixtures
+/scripts/tts_resource_probe_results.json
+/tests/fixtures/*.wav
+/tests/*.db
+
+# Machine-specific launch wrappers and patch snapshots
+/AGENTS.md
+/start_luyang.sh
+/stop_luyang.sh
+/tart_voice_only.sh
+/scripts/patches/
 
 # Agent / tooling local state
 .agents/

@@ -79,6 +79,7 @@ class VoiceEndpointConfig:
     soulx_timeout_s: float
     soulx_retry_interval_s: float
     soulx_minimum_utterance_rms: float
+    soulx_barge_in_minimum_chunk_rms: float
     soulx_pre_roll_s: float
     vad_pre_end_arm_window_s: float
     vad_minimum_post_tts_chunks: int
@@ -93,7 +94,10 @@ class VoiceEndpointConfig:
     enable_realtime_companion: bool = True
     realtime_emotion_interval_s: float = 0.8
     realtime_emotion_window_s: float = 3.0
-    memory_timeout_s: float = 3.0
+    memory_timeout_s: float = 0.25
+    memory_prefetch_stability_s: float = 0.35
+    memory_prefetch_min_interval_s: float = 0.5
+    interrupt_stop_duration: float = 0.20
 
 
 class VoiceEndpointApplication:
@@ -108,6 +112,7 @@ class VoiceEndpointApplication:
         patient_memory_service: PatientMemoryService,
         config: VoiceEndpointConfig,
         repository=database,
+        render_manager=None,
         logger=print,
     ) -> None:
         self.auth = auth
@@ -116,6 +121,7 @@ class VoiceEndpointApplication:
         self.patient_memory_service = patient_memory_service
         self.config = config
         self.repository = repository
+        self.render_manager = render_manager
         self._log = logger
 
     async def handle(self, transport) -> None:
@@ -241,16 +247,49 @@ class VoiceEndpointApplication:
                 self.recognition.normalize_interrupt_text
             ),
             soulx_session_id_factory=self._soulx_session_id,
+            cancel_render_jobs=(
+                self.render_manager.cancel if self.render_manager else None
+            ),
         )
         manifest_store = VoiceDatasetManifestStore(
             session,
             list_audio=self.repository.list_audio_records,
             normalize_profile=profile_service.normalize,
         )
+        def enqueue_render_audio(audio_meta: dict, content_text: str) -> None:
+            if self.render_manager is None:
+                return
+            identity = connection.current_output_identity() or {}
+            processing = session.processing
+            if not identity:
+                turn_id = str(
+                    processing.active_turn_id
+                    or f"system-{session.session_id or 'session'}"
+                )
+                generation = int(processing.generation or 0)
+                identity = {
+                    "session_id": session.session_id,
+                    "turn_id": turn_id,
+                    "generation": generation,
+                    "playback_id": str(
+                        processing.active_playback_id
+                        or f"playback-{turn_id}-{generation}"
+                    ),
+                }
+            self.render_manager.enqueue(
+                session=session,
+                connection=connection,
+                audio_meta=audio_meta,
+                reply_text=content_text,
+                emotion="neutral",
+                output_identity=identity,
+            )
+
         audio_store = VoiceAudioStore(
             session,
             save_audio=self.repository.save_audio_record,
             manifest_store=manifest_store,
+            on_assistant_persist=enqueue_render_audio,
         )
         history_store = VoiceHistoryStore(
             session,
@@ -272,12 +311,20 @@ class VoiceEndpointApplication:
             config=RealtimeCompanionConfig(
                 enabled=(
                     config.enable_realtime_companion
-                    and config.use_ark_asr
-                    and ark_asr_streaming_supported()
+                    and (
+                        config.use_soulx_turn_taking
+                        or (
+                            config.use_ark_asr
+                            and ark_asr_streaming_supported()
+                        )
+                    )
                 ),
+                external_asr=config.use_soulx_turn_taking,
                 emotion_interval_s=config.realtime_emotion_interval_s,
                 emotion_window_s=config.realtime_emotion_window_s,
                 memory_timeout_s=config.memory_timeout_s,
+                memory_prefetch_stability_s=config.memory_prefetch_stability_s,
+                memory_prefetch_min_interval_s=config.memory_prefetch_min_interval_s,
             ),
         )
         def authorize_patient(patient_id: str, action: str = "voice") -> bool:
@@ -359,6 +406,9 @@ class VoiceEndpointApplication:
             stop_playback=interruption.stop_playback,
             disconnect_error_type=WebSocketDisconnect,
             client_id=client_id,
+            cancel_render_jobs=(
+                self.render_manager.cancel if self.render_manager else None
+            ),
         )
         answer_controller = AnswerCompletionController(
             connection,
@@ -417,6 +467,9 @@ class VoiceEndpointApplication:
             patient_memory_service=self.patient_memory_service,
             end_session=self.repository.end_session,
             realtime_companion=realtime_companion,
+            cancel_render_jobs=(
+                self.render_manager.cancel if self.render_manager else None
+            ),
         )
         await bootstrap.send_waiting_for_info()
         return VoiceConnectionController(connection, router), cleanup
@@ -508,6 +561,12 @@ class VoiceEndpointApplication:
             session=session,
             stop_playback=interruption.stop_playback,
             reset_interrupt_capture=interruption.reset_capture,
+            interrupt_active_processing=(
+                lambda reason: processing.interrupt_active(
+                    reason,
+                    force_playback=True,
+                )
+            ),
         )
         vision_handler = VisionMessageHandler(
             connection,
@@ -556,6 +615,10 @@ class VoiceEndpointApplication:
             reset_local_vad=vad_buffer.reset,
             is_ai_speaking=interruption.is_ai_speaking,
             stop_playback=interruption.stop_playback,
+            is_processing=lambda: session.processing.is_active,
+            interrupt_active_processing=(
+                lambda reason: processing.interrupt_active(reason, force_playback=True)
+            ),
             notify_answer_completion=answer_controller.notify,
             arm_answer_completion_window=(
                 answer_controller.maybe_arm_window
@@ -567,6 +630,13 @@ class VoiceEndpointApplication:
             enabled_full_duplex=config.enable_full_duplex,
             minimum_utterance_rms=(
                 config.soulx_minimum_utterance_rms
+            ),
+            barge_in_minimum_chunk_rms=(
+                config.soulx_barge_in_minimum_chunk_rms
+            ),
+            realtime_companion=realtime_companion,
+            ensure_session_on_speech=(
+                lifecycle_handler.start_next_on_speech
             ),
         )
         live_handler = LiveAudioInputHandler(
@@ -615,6 +685,7 @@ class VoiceEndpointApplication:
                 interrupt_min_duration=(
                     config.interrupt_minimum_duration
                 ),
+                interrupt_stop_duration=config.interrupt_stop_duration,
                 interrupt_trigger_probability=(
                     config.interrupt_trigger_probability
                 ),

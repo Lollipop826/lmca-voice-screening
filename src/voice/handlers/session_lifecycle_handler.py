@@ -21,6 +21,18 @@ def _cognitive_enabled() -> bool:
         "1", "true", "yes", "on"
     }
 
+
+def _emotion_enabled() -> bool:
+    return os.getenv("ENABLE_EMOTION", "true").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
+def _long_term_memory_writes_enabled() -> bool:
+    return os.getenv(
+        "ENABLE_LONG_TERM_MEMORY_WRITES", "true"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
 class SessionLifecycleHandler:
     """Start and end assessments while keeping all connection-owned state aligned."""
 
@@ -188,6 +200,7 @@ class SessionLifecycleHandler:
                         self.session.lifecycle.current_patient_id,
                         total_mmse_score,
                         weak_dimensions,
+                        session_id=ended_session_id,
                     )
                 if not synced:
                     updater = getattr(
@@ -319,6 +332,12 @@ class SessionLifecycleHandler:
         self.session.long_term_memory_enabled = (
             message.get("long_term_memory_enabled", True) is not False
         )
+        self.session.long_term_memory_writes_enabled = (
+            message.get("long_term_memory_writes_enabled", True) is not False
+        )
+        self.session.emotion_enabled = (
+            message.get("emotion_enabled", True) is not False
+        )
         self.session.patient_profile.clear()
         self.session.patient_profile.update(profile)
         self._log(f"\n[开始] 收到用户档案 fields={len(profile)}")
@@ -352,6 +371,13 @@ class SessionLifecycleHandler:
                 "profile": profile,
                 "mode": normalize_session_mode(self.session.mode),
                 "long_term_memory_enabled": self.session.long_term_memory_enabled,
+                "long_term_memory_writes_enabled": (
+                    self.session.long_term_memory_writes_enabled
+                    and _long_term_memory_writes_enabled()
+                ),
+                "emotion_enabled": (
+                    self.session.emotion_enabled and _emotion_enabled()
+                ),
             }
         )
 
@@ -389,6 +415,16 @@ class SessionLifecycleHandler:
                     "profile": profile,
                     "mode": normalize_session_mode(self.session.mode),
                     "auto_started": True,
+                    "long_term_memory_enabled": (
+                        self.session.long_term_memory_enabled
+                    ),
+                    "long_term_memory_writes_enabled": (
+                        self.session.long_term_memory_writes_enabled
+                        and _long_term_memory_writes_enabled()
+                    ),
+                    "emotion_enabled": (
+                        self.session.emotion_enabled and _emotion_enabled()
+                    ),
                 }
             )
             return True
@@ -409,7 +445,10 @@ class SessionLifecycleHandler:
             if callable(bind_agent):
                 bind_agent(
                     self.session.agent,
-                    enabled=self.session.long_term_memory_enabled,
+                    enabled=(
+                        self.session.long_term_memory_enabled
+                        and self.session.long_term_memory_writes_enabled
+                    ),
                 )
             memory_tool = self.session.agent.tool_gateway.memory_tool
             setter = getattr(memory_tool, "set_persistent_background", None)

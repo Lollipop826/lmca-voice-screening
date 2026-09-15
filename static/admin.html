@@ -3,912 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>管理员后台 · 记忆守护</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg: #f4f7fb;
-            --surface: rgba(255, 255, 255, 0.9);
-            --surface-solid: #ffffff;
-            --border: rgba(212, 221, 232, 0.9);
-            --text: #17324d;
-            --text-muted: #627489;
-            --primary: #0f766e;
-            --primary-soft: rgba(15, 118, 110, 0.1);
-            --accent: #2563eb;
-            --accent-soft: rgba(37, 99, 235, 0.1);
-            --warning: #b45309;
-            --warning-soft: rgba(245, 158, 11, 0.12);
-            --danger: #b91c1c;
-            --danger-soft: rgba(239, 68, 68, 0.1);
-            --success: #15803d;
-            --success-soft: rgba(34, 197, 94, 0.12);
-            --shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
-            --radius: 18px;
-            --font: 'Noto Sans SC', sans-serif;
-        }
-
-        * { box-sizing: border-box; }
-
-        html, body {
-            margin: 0;
-            padding: 0;
-            min-height: 100%;
-            font-family: var(--font);
-            color: var(--text);
-            background:
-                radial-gradient(900px 500px at 0% 0%, rgba(15, 118, 110, 0.08), transparent 60%),
-                radial-gradient(850px 560px at 100% 0%, rgba(37, 99, 235, 0.08), transparent 58%),
-                linear-gradient(180deg, #f7fafc 0%, #eef3f9 100%);
-        }
-
-        body {
-            padding: 24px;
-        }
-
-        body.modal-open {
-            overflow: hidden;
-        }
-
-        .page {
-            max-width: 1380px;
-            margin: 0 auto;
-        }
-
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 16px;
-            margin-bottom: 20px;
-        }
-
-        .brand {
-            display: flex;
-            align-items: flex-start;
-            gap: 14px;
-        }
-
-        .brand-badge {
-            width: 52px;
-            height: 52px;
-            border-radius: 16px;
-            display: grid;
-            place-items: center;
-            background: linear-gradient(135deg, rgba(15, 118, 110, 0.16), rgba(37, 99, 235, 0.12));
-            color: var(--primary);
-            font-size: 22px;
-        }
-
-        .brand h1 {
-            margin: 0;
-            font-size: 30px;
-            line-height: 1.15;
-        }
-
-        .brand p {
-            margin: 7px 0 0;
-            color: var(--text-muted);
-            font-size: 14px;
-        }
-
-        .header-actions {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: flex-end;
-            gap: 10px;
-        }
-
-        .chip, .link-btn, .logout-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            min-height: 42px;
-            padding: 0 14px;
-            border-radius: 999px;
-            border: 1px solid var(--border);
-            background: rgba(255, 255, 255, 0.84);
-            color: var(--text);
-            font-size: 14px;
-            font-weight: 700;
-            text-decoration: none;
-            backdrop-filter: blur(14px);
-        }
-
-        .chip .name {
-            max-width: 160px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .link-btn:hover {
-            border-color: rgba(37, 99, 235, 0.35);
-            color: var(--accent);
-        }
-
-        .logout-btn {
-            cursor: pointer;
-            color: var(--danger);
-            background: rgba(255, 255, 255, 0.88);
-        }
-
-        .logout-btn:hover {
-            background: #fff5f5;
-            border-color: rgba(239, 68, 68, 0.28);
-        }
-
-        .flash {
-            display: none;
-            align-items: center;
-            justify-content: space-between;
-            gap: 14px;
-            padding: 14px 16px;
-            border-radius: var(--radius);
-            margin-bottom: 16px;
-            border: 1px solid transparent;
-            box-shadow: var(--shadow);
-        }
-
-        .flash.show {
-            display: flex;
-        }
-
-        .flash-main {
-            display: flex;
-            align-items: flex-start;
-            gap: 10px;
-            min-width: 0;
-        }
-
-        .flash-title {
-            font-size: 14px;
-            font-weight: 800;
-            margin-bottom: 4px;
-        }
-
-        .flash-text {
-            font-size: 13px;
-            line-height: 1.6;
-        }
-
-        .flash button {
-            border: none;
-            background: transparent;
-            color: inherit;
-            cursor: pointer;
-            font-size: 16px;
-        }
-
-        .flash-info {
-            background: rgba(255, 255, 255, 0.92);
-            border-color: rgba(37, 99, 235, 0.14);
-            color: var(--accent);
-        }
-
-        .flash-success {
-            background: rgba(240, 253, 244, 0.94);
-            border-color: rgba(34, 197, 94, 0.22);
-            color: var(--success);
-        }
-
-        .flash-error {
-            background: rgba(254, 242, 242, 0.96);
-            border-color: rgba(239, 68, 68, 0.2);
-            color: var(--danger);
-        }
-
-        .notice {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            padding: 16px 18px;
-            border-radius: var(--radius);
-            background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(244, 248, 255, 0.98));
-            border: 1px solid var(--border);
-            box-shadow: var(--shadow);
-            margin-bottom: 20px;
-        }
-
-        .notice-main {
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-        }
-
-        .notice-main i {
-            color: var(--warning);
-            margin-top: 2px;
-        }
-
-        .notice-title {
-            font-size: 15px;
-            font-weight: 800;
-            margin-bottom: 4px;
-        }
-
-        .notice-text {
-            color: var(--text-muted);
-            font-size: 13px;
-            line-height: 1.6;
-        }
-
-        .status-pill {
-            border-radius: 999px;
-            padding: 8px 12px;
-            background: var(--warning-soft);
-            color: var(--warning);
-            font-size: 13px;
-            font-weight: 700;
-            white-space: nowrap;
-        }
-
-        .topbar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-
-        .topbar-actions {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .updated-at {
-            color: var(--text-muted);
-            font-size: 13px;
-        }
-
-        .primary-btn,
-        .secondary-btn,
-        .refresh-btn,
-        .table-action,
-        .icon-btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            border-radius: 12px;
-            font-size: 14px;
-            font-weight: 700;
-            cursor: pointer;
-            transition: 0.2s ease;
-            font-family: inherit;
-        }
-
-        .primary-btn,
-        .secondary-btn,
-        .refresh-btn {
-            min-height: 44px;
-            padding: 0 14px;
-            border: 1px solid transparent;
-        }
-
-        .primary-btn {
-            background: linear-gradient(135deg, var(--primary), #12857b);
-            color: #fff;
-            box-shadow: 0 10px 24px rgba(15, 118, 110, 0.18);
-        }
-
-        .primary-btn:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 14px 28px rgba(15, 118, 110, 0.22);
-        }
-
-        .secondary-btn {
-            border-color: rgba(37, 99, 235, 0.15);
-            background: rgba(255, 255, 255, 0.9);
-            color: var(--accent);
-        }
-
-        .secondary-btn:hover,
-        .refresh-btn:hover {
-            border-color: rgba(37, 99, 235, 0.3);
-            background: rgba(247, 250, 255, 0.98);
-        }
-
-        .refresh-btn {
-            border-color: rgba(15, 118, 110, 0.25);
-            background: rgba(15, 118, 110, 0.08);
-            color: var(--primary);
-        }
-
-        .primary-btn:disabled,
-        .secondary-btn:disabled,
-        .refresh-btn:disabled,
-        .table-action:disabled,
-        .icon-btn:disabled {
-            opacity: 0.7;
-            cursor: wait;
-            transform: none;
-            box-shadow: none;
-        }
-
-        .summary-grid {
-            display: grid;
-            grid-template-columns: repeat(6, minmax(0, 1fr));
-            gap: 14px;
-            margin-bottom: 20px;
-        }
-
-        .summary-card {
-            padding: 18px;
-            border-radius: var(--radius);
-            background: var(--surface);
-            border: 1px solid var(--border);
-            box-shadow: var(--shadow);
-            backdrop-filter: blur(14px);
-        }
-
-        .summary-label {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            color: var(--text-muted);
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        .summary-label i {
-            color: var(--primary);
-        }
-
-        .summary-value {
-            margin-top: 14px;
-            font-size: 30px;
-            line-height: 1;
-            font-weight: 800;
-        }
-
-        .summary-sub {
-            margin-top: 10px;
-            color: var(--text-muted);
-            font-size: 13px;
-        }
-
-        .management-grid {
-            display: grid;
-            grid-template-columns: 1.15fr 0.85fr;
-            gap: 18px;
-            margin-bottom: 20px;
-        }
-
-        .panel-grid {
-            display: grid;
-            grid-template-columns: 1.4fr 0.9fr;
-            gap: 18px;
-            margin-bottom: 20px;
-        }
-
-        .panel {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: 22px;
-            box-shadow: var(--shadow);
-            backdrop-filter: blur(14px);
-            overflow: hidden;
-        }
-
-        .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 10px;
-            padding: 18px 20px 14px;
-            border-bottom: 1px solid rgba(226, 232, 240, 0.85);
-        }
-
-        .panel-title {
-            font-size: 17px;
-            font-weight: 800;
-        }
-
-        .panel-subtitle {
-            margin-top: 4px;
-            color: var(--text-muted);
-            font-size: 13px;
-        }
-
-        .panel-body {
-            padding: 18px 20px 20px;
-        }
-
-        .inline-stats {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-
-        .inline-stat {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 10px;
-            border-radius: 999px;
-            background: rgba(37, 99, 235, 0.08);
-            color: #35597b;
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .form-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 14px;
-        }
-
-        .form-stack {
-            display: grid;
-            gap: 14px;
-        }
-
-        .field {
-            display: grid;
-            gap: 8px;
-        }
-
-        .field.full {
-            grid-column: 1 / -1;
-        }
-
-        .field label {
-            font-size: 13px;
-            font-weight: 800;
-            color: #3f5873;
-        }
-
-        .input,
-        .select {
-            width: 100%;
-            min-height: 46px;
-            padding: 0 14px;
-            border-radius: 14px;
-            border: 1px solid rgba(203, 213, 225, 0.92);
-            background: rgba(255, 255, 255, 0.96);
-            color: var(--text);
-            font: inherit;
-        }
-
-        .input:focus,
-        .select:focus,
-        .search:focus {
-            outline: none;
-            border-color: rgba(37, 99, 235, 0.42);
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08);
-        }
-
-        .hint {
-            color: var(--text-muted);
-            font-size: 12px;
-            line-height: 1.5;
-        }
-
-        .form-actions {
-            grid-column: 1 / -1;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            align-items: center;
-        }
-
-        .divider {
-            height: 1px;
-            background: rgba(226, 232, 240, 0.92);
-            margin: 18px 0;
-        }
-
-        .activity-bars {
-            display: grid;
-            grid-template-columns: repeat(14, minmax(0, 1fr));
-            gap: 10px;
-            align-items: end;
-            min-height: 210px;
-        }
-
-        .bar-col {
-            display: flex;
-            flex-direction: column;
-            justify-content: end;
-            align-items: center;
-            gap: 10px;
-            min-height: 210px;
-        }
-
-        .bar {
-            width: 100%;
-            max-width: 42px;
-            min-height: 8px;
-            border-radius: 14px 14px 8px 8px;
-            background: linear-gradient(180deg, rgba(37, 99, 235, 0.96), rgba(15, 118, 110, 0.72));
-            box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.2);
-        }
-
-        .bar-value {
-            font-size: 12px;
-            font-weight: 800;
-            color: var(--accent);
-        }
-
-        .bar-date {
-            font-size: 11px;
-            color: var(--text-muted);
-            writing-mode: vertical-rl;
-            transform: rotate(180deg);
-        }
-
-        .mini-metrics {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 12px;
-        }
-
-        .mini-card {
-            border-radius: 18px;
-            padding: 16px;
-            background: var(--surface-solid);
-            border: 1px solid var(--border);
-        }
-
-        .mini-card .title {
-            color: var(--text-muted);
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        .mini-card .value {
-            margin-top: 10px;
-            font-size: 24px;
-            font-weight: 800;
-        }
-
-        .toolbar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 14px;
-        }
-
-        .toolbar-right {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        .search {
-            width: min(360px, 100%);
-            min-height: 46px;
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            padding: 0 14px;
-            font: inherit;
-            background: rgba(255, 255, 255, 0.94);
-            color: var(--text);
-        }
-
-        .filter-select {
-            min-width: 120px;
-        }
-
-        .table-wrap {
-            overflow: auto;
-            border-radius: 16px;
-            border: 1px solid rgba(226, 232, 240, 0.9);
-            background: rgba(255, 255, 255, 0.92);
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            min-width: 1180px;
-        }
-
-        th, td {
-            padding: 14px 16px;
-            text-align: left;
-            border-bottom: 1px solid rgba(226, 232, 240, 0.9);
-            vertical-align: middle;
-        }
-
-        th {
-            position: sticky;
-            top: 0;
-            z-index: 1;
-            background: #f8fbff;
-            color: var(--text-muted);
-            font-size: 12px;
-            font-weight: 800;
-            text-transform: uppercase;
-        }
-
-        td {
-            font-size: 14px;
-        }
-
-        tr.current-row {
-            background: rgba(15, 118, 110, 0.04);
-        }
-
-        .user-cell {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .user-topline {
-            display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-
-        .user-name {
-            font-weight: 800;
-        }
-
-        .user-id {
-            color: var(--text-muted);
-            font-size: 12px;
-        }
-
-        .current-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 9px;
-            border-radius: 999px;
-            background: rgba(15, 118, 110, 0.1);
-            color: var(--primary);
-            font-size: 11px;
-            font-weight: 800;
-        }
-
-        .role-badge, .state-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 10px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 800;
-            width: fit-content;
-            white-space: nowrap;
-        }
-
-        .role-admin {
-            background: var(--primary-soft);
-            color: var(--primary);
-        }
-
-        .role-user {
-            background: var(--accent-soft);
-            color: var(--accent);
-        }
-
-        .state-active {
-            background: var(--success-soft);
-            color: var(--success);
-        }
-
-        .state-idle {
-            background: rgba(148, 163, 184, 0.12);
-            color: #475569;
-        }
-
-        .row-actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-
-        .table-action {
-            min-height: 34px;
-            padding: 0 12px;
-            border: 1px solid rgba(203, 213, 225, 0.95);
-            background: rgba(255, 255, 255, 0.96);
-            color: #385b79;
-            white-space: nowrap;
-        }
-
-        .table-action:hover {
-            border-color: rgba(37, 99, 235, 0.28);
-            color: var(--accent);
-        }
-
-        .table-action.warn {
-            color: var(--warning);
-        }
-
-        .recent-list {
-            display: grid;
-            gap: 12px;
-        }
-
-        .recent-card {
-            padding: 16px;
-            border-radius: 18px;
-            border: 1px solid rgba(226, 232, 240, 0.92);
-            background: rgba(255, 255, 255, 0.96);
-        }
-
-        .recent-top {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 12px;
-            margin-bottom: 10px;
-        }
-
-        .recent-title {
-            font-size: 15px;
-            font-weight: 800;
-        }
-
-        .recent-sub {
-            margin-top: 4px;
-            color: var(--text-muted);
-            font-size: 13px;
-        }
-
-        .meta-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-
-        .meta-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 10px;
-            border-radius: 999px;
-            background: #f5f8fc;
-            color: #46617d;
-            font-size: 12px;
-            font-weight: 700;
-        }
-
-        .empty {
-            padding: 36px 18px;
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 14px;
-        }
-
-        .modal-backdrop {
-            position: fixed;
-            inset: 0;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            padding: 20px;
-            background: rgba(15, 23, 42, 0.34);
-            backdrop-filter: blur(8px);
-            z-index: 90;
-        }
-
-        .modal-backdrop.open {
-            display: flex;
-        }
-
-        .modal {
-            width: min(560px, 100%);
-            max-height: calc(100vh - 40px);
-            overflow-y: auto;
-            background: rgba(255, 255, 255, 0.98);
-            border: 1px solid rgba(226, 232, 240, 0.92);
-            border-radius: 22px;
-            box-shadow: 0 26px 60px rgba(15, 23, 42, 0.22);
-        }
-
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 12px;
-            padding: 20px 20px 14px;
-            border-bottom: 1px solid rgba(226, 232, 240, 0.9);
-        }
-
-        .modal-body {
-            padding: 18px 20px 20px;
-        }
-
-        .icon-btn {
-            width: 36px;
-            height: 36px;
-            border: 1px solid rgba(203, 213, 225, 0.92);
-            background: rgba(255, 255, 255, 0.94);
-            color: #516b86;
-        }
-
-        .icon-btn:hover {
-            border-color: rgba(37, 99, 235, 0.25);
-            color: var(--accent);
-        }
-
-        .readonly-box {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 12px 14px;
-            border-radius: 14px;
-            background: rgba(15, 118, 110, 0.06);
-            border: 1px solid rgba(15, 118, 110, 0.12);
-            color: #385769;
-            font-size: 14px;
-            font-weight: 700;
-        }
-
-        .muted {
-            color: var(--text-muted);
-        }
-
-        @media (max-width: 1180px) {
-            .summary-grid {
-                grid-template-columns: repeat(3, minmax(0, 1fr));
-            }
-            .management-grid,
-            .panel-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-
-        @media (max-width: 760px) {
-            body {
-                padding: 16px;
-            }
-            .header,
-            .notice,
-            .topbar,
-            .toolbar,
-            .toolbar-right {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .header-actions {
-                justify-content: flex-start;
-            }
-            .summary-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-            .activity-bars {
-                gap: 6px;
-            }
-            .form-grid {
-                grid-template-columns: 1fr;
-            }
-            .form-actions,
-            .topbar-actions {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .search {
-                width: 100%;
-            }
-            .mini-metrics {
-                grid-template-columns: 1fr 1fr;
-            }
-            .modal-backdrop {
-                padding: 12px;
-            }
-        }
-    </style>
+    <title>管理员后台 · 心语陪伴</title>
+    <link rel="stylesheet" href="/static/vendor/fontawesome/css/all.min.css">
+    <meta name="theme-color" content="#edf5ef">
+    <link rel="stylesheet" href="/static/companion_ui.css?v=20260914-unified-1">
+    <script src="/static/companion_ui.js?v=20260914-unified-1" defer></script>
 </head>
-<body>
+<body class="companion-page admin-page">
+    <a class="ui-skip-link" href="#admin-main">跳到管理内容</a>
     <div class="page">
-        <div class="header">
+        <header class="header page-header">
             <div class="brand">
-                <div class="brand-badge"><i class="fas fa-shield-halved"></i></div>
+                <div class="brand-badge"><i class="fas fa-heart-pulse" aria-hidden="true"></i></div>
                 <div>
-                    <h1>管理员后台</h1>
-                    <p>查看使用情况、管理后台账号，并处理密码与权限变更。</p>
+                    <h1>管理后台</h1>
+                    <p>心语陪伴 · 账号、权限与使用情况</p>
                 </div>
             </div>
             <div class="header-actions">
@@ -916,13 +25,14 @@
                     <i class="fas fa-user-shield"></i>
                     <span id="auth-user-name" class="name">正在加载...</span>
                 </div>
-                <a href="/history" class="link-btn"><i class="fas fa-clock-rotate-left"></i> 历史记录</a>
-                <a href="/" class="link-btn"><i class="fas fa-microphone-lines"></i> 返回评估</a>
+                <a href="/history" class="link-btn"><i class="fas fa-clock-rotate-left"></i> 陪伴记录</a>
+                <a href="/" class="link-btn"><i class="fas fa-microphone-lines"></i> 返回陪伴</a>
                 <button id="logout-btn" class="logout-btn" onclick="logoutCurrentUser()"><i class="fas fa-arrow-right-from-bracket"></i> 退出</button>
             </div>
-        </div>
+        </header>
 
-        <div id="flash-message" class="flash flash-info">
+        <main id="admin-main" tabindex="-1">
+        <div id="flash-message" class="flash flash-info" role="status" aria-live="polite" aria-atomic="true">
             <div class="flash-main">
                 <i id="flash-icon" class="fas fa-circle-info"></i>
                 <div>
@@ -938,7 +48,7 @@
                 <i class="fas fa-circle-info"></i>
                 <div>
                     <div class="notice-title">会话归属说明</div>
-                    <div class="notice-text">从本次改动开始，新创建和新恢复的会话都会记录归属后台账号。更早的历史会话如果当时没有保存账号信息，会在这里显示为“未归属”。</div>
+                    <div class="notice-text">会话记录与创建或恢复它的账号关联。没有保存账号信息的历史会话，显示为“未归属”。</div>
                 </div>
             </div>
             <div id="unassigned-pill" class="status-pill">未归属会话 0 条</div>
@@ -959,7 +69,7 @@
                 <div class="panel-header">
                     <div>
                         <div class="panel-title">账号管理</div>
-                        <div class="panel-subtitle">创建新账号，供科室成员登录和使用语音评估系统。</div>
+                        <div class="panel-subtitle">创建新账号，供成员登录和使用心理健康陪伴系统。</div>
                     </div>
                     <div class="inline-stats">
                         <span class="inline-stat"><i class="fas fa-users"></i> <span id="inline-total-users">0 个账号</span></span>
@@ -970,12 +80,12 @@
                     <form id="create-user-form" class="form-grid" onsubmit="submitCreateUser(event)">
                         <div class="field">
                             <label for="create-username">用户名</label>
-                            <input id="create-username" class="input" type="text" maxlength="24" autocomplete="off" placeholder="如 nurse_01">
+                            <input id="create-username" class="input" type="text" maxlength="24" autocomplete="off" placeholder="如 companion_01">
                             <div class="hint">3-24 位，只允许字母、数字、下划线、点和横线。</div>
                         </div>
                         <div class="field">
                             <label for="create-display-name">显示名</label>
-                            <input id="create-display-name" class="input" type="text" maxlength="32" placeholder="如 护士站1号">
+                            <input id="create-display-name" class="input" type="text" maxlength="32" placeholder="如 陪伴团队">
                             <div class="hint">会显示在后台和归属统计里。</div>
                         </div>
                         <div class="field">
@@ -1044,7 +154,7 @@
                         <div class="panel-subtitle">按创建日期统计会话数量，并显示当天活跃后台账号数。</div>
                     </div>
                 </div>
-                <div class="panel-body">
+                <div class="panel-body activity-chart" role="region" aria-label="近十四天活跃度，可横向滚动" tabindex="0">
                     <div id="daily-activity" class="activity-bars"></div>
                 </div>
             </section>
@@ -1088,9 +198,9 @@
             </div>
             <div class="panel-body">
                 <div class="toolbar">
-                    <input id="user-search" class="search" placeholder="搜索用户名、显示名或最近患者..." oninput="renderUsers()">
+                    <input type="search" aria-label="搜索账号" id="user-search" class="search" placeholder="搜索用户名、显示名或最近用户..." oninput="renderUsers()">
                     <div class="toolbar-right">
-                        <select id="role-filter" class="select filter-select" onchange="renderUsers()">
+                        <select aria-label="筛选账号角色" id="role-filter" class="select filter-select" onchange="renderUsers()">
                             <option value="all">全部角色</option>
                             <option value="admin">仅管理员</option>
                             <option value="user">仅普通用户</option>
@@ -1098,7 +208,7 @@
                         <div class="updated-at" id="user-table-count">0 个账号</div>
                     </div>
                 </div>
-                <div class="table-wrap">
+                <div class="table-wrap" role="region" aria-label="后台账号使用表，可横向滚动" tabindex="0">
                     <table>
                         <thead>
                             <tr>
@@ -1111,7 +221,7 @@
                                 <th>进行中</th>
                                 <th>消息数</th>
                                 <th>录音分钟</th>
-                                <th>最近患者</th>
+                                <th>最近用户</th>
                                 <th>操作</th>
                             </tr>
                         </thead>
@@ -1134,18 +244,20 @@
                 <div id="recent-sessions" class="recent-list"></div>
             </div>
         </section>
+        </main>
     </div>
 
-    <div id="modal-backdrop" class="modal-backdrop" onclick="handleModalBackdrop(event)">
+    <dialog id="modal-backdrop" class="modal-backdrop companion-dialog" aria-labelledby="modal-title" aria-describedby="modal-subtitle" onclick="handleModalBackdrop(event)">
         <div class="modal" onclick="event.stopPropagation()">
             <div class="modal-header">
                 <div>
-                    <div id="modal-title" class="panel-title">编辑账号</div>
+                    <h2 id="modal-title" class="panel-title">编辑账号</h2>
                     <div id="modal-subtitle" class="panel-subtitle">修改显示名、角色或密码。</div>
                 </div>
                 <button class="icon-btn" type="button" onclick="closeModal()" aria-label="关闭"><i class="fas fa-xmark"></i></button>
             </div>
             <div class="modal-body">
+                <div id="modal-feedback" class="modal-feedback" role="status" aria-live="polite" aria-atomic="true" hidden></div>
                 <form id="edit-user-form" class="form-stack" style="display:none;" onsubmit="submitEditUser(event)">
                     <div id="edit-user-target" class="readonly-box"><i class="fas fa-user"></i> --</div>
                     <div class="field">
@@ -1185,7 +297,7 @@
                 </form>
             </div>
         </div>
-    </div>
+    </dialog>
 
     <script>
         let currentAuthUser = null;
@@ -1250,6 +362,14 @@
         }
 
         function showFlash(message, type = 'info', title = '') {
+            // A native dialog makes the page behind it inert; keep form feedback inside.
+            if (document.getElementById('modal-backdrop').open) {
+                const feedback = document.getElementById('modal-feedback');
+                feedback.className = `modal-feedback flash-${type}`;
+                feedback.textContent = title ? `${title}：${message}` : message;
+                feedback.hidden = false;
+                return;
+            }
             const flash = document.getElementById('flash-message');
             const icon = document.getElementById('flash-icon');
             const titleEl = document.getElementById('flash-title');
@@ -1382,7 +502,7 @@
                 { label: '7天活跃账号', icon: 'fa-bolt', value: formatNumber(overview.active_users_7d), sub: '按登录或最近会话活动统计' },
                 { label: '总会话数', icon: 'fa-headset', value: formatNumber(overview.total_sessions), sub: `进行中 ${formatNumber(overview.active_sessions)} 条` },
                 { label: '已归属会话', icon: 'fa-link', value: formatNumber(overview.assigned_sessions), sub: `未归属 ${formatNumber(overview.unassigned_sessions)} 条` },
-                { label: '总消息数', icon: 'fa-comments', value: formatNumber(overview.message_count), sub: '患者与系统消息总和' },
+                { label: '总消息数', icon: 'fa-comments', value: formatNumber(overview.message_count), sub: '用户与系统消息总和' },
                 { label: '录音总分钟', icon: 'fa-wave-square', value: formatNumber(overview.audio_duration_minutes), sub: `${formatNumber(overview.audio_count)} 段音频` }
             ];
             document.getElementById('summary-grid').innerHTML = cards.map((card) => `
@@ -1499,7 +619,7 @@
                     <article class="recent-card">
                         <div class="recent-top">
                             <div>
-                                <div class="recent-title">${escapeHtml(item.patient_name || '未填写患者')}</div>
+                                <div class="recent-title">${escapeHtml(item.patient_name || '未填写用户')}</div>
                                 <div class="recent-sub">${escapeHtml(item.owner_display_name || item.owner_username || '未归属')} · ${escapeHtml(item.owner_username || 'unassigned')}</div>
                             </div>
                             <span class="state-badge ${ended ? 'state-idle' : 'state-active'}">${ended ? '已结束' : '进行中'}</span>
@@ -1670,26 +790,36 @@
 
         function openModal(type) {
             modalState.type = type;
-            document.getElementById('modal-backdrop').classList.add('open');
+            document.getElementById('modal-feedback').hidden = true;
+            document.getElementById('modal-feedback').textContent = '';
+            const dialog = document.getElementById('modal-backdrop');
             document.body.classList.add('modal-open');
             const editForm = document.getElementById('edit-user-form');
             const resetForm = document.getElementById('reset-password-form');
             editForm.style.display = type === 'edit' ? 'grid' : 'none';
             resetForm.style.display = type === 'reset-password' ? 'grid' : 'none';
+            if (!dialog.open) dialog.showModal();
+            const firstField = (type === 'edit' ? editForm : resetForm).querySelector('input:not([type=hidden]), select');
+            if (firstField) firstField.focus();
         }
 
         function closeModal() {
+            const dialog = document.getElementById('modal-backdrop');
+            if (!dialog.open) return;
+            dialog.close();
             modalState = { type: '', username: '' };
-            document.getElementById('modal-backdrop').classList.remove('open');
             document.body.classList.remove('modal-open');
+            document.getElementById('modal-feedback').hidden = true;
+            document.getElementById('modal-feedback').textContent = '';
             document.getElementById('edit-user-form').reset();
             document.getElementById('reset-password-form').reset();
         }
 
         function handleModalBackdrop(event) {
-            if (event.target && event.target.id === 'modal-backdrop') {
-                closeModal();
-            }
+            const dialog = document.getElementById('modal-backdrop');
+            if (event.target !== dialog) return;
+            const rect = dialog.getBoundingClientRect();
+            if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) closeModal();
         }
 
         function openEditUserModal(encodedUsername) {
@@ -1842,16 +972,14 @@
             }
         }
 
-        window.addEventListener('keydown', (event) => {
-            if (event.key === 'Escape') {
-                closeModal();
-            }
+        document.getElementById('modal-backdrop').addEventListener('cancel', event => {
+            event.preventDefault();
+            closeModal();
         });
 
         window.addEventListener('DOMContentLoaded', async () => {
             const authed = await bootstrapAuthUser();
             if (!authed) return;
-            showFlash('管理员入口、账号管理和密码管理都已经集中到这个页面了。', 'info', '后台已就绪');
             await refreshDashboard();
         });
     </script>

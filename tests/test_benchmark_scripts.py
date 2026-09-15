@@ -49,13 +49,26 @@ def test_emotion_benchmark_uses_audio_classifier_api(tmp_path, monkeypatch):
     benchmark.test_samples = [
         {"audio_path": str(joy), "true_emotion": "joy", "age_group": "young"},
         {"audio_path": str(sadness), "true_emotion": "sadness", "age_group": "elderly"},
-        {"audio_path": str(tmp_path / "missing.wav"), "true_emotion": "calm"},
     ]
 
     result = benchmark.benchmark_emotion2vec()
 
     assert result.accuracy == 1.0
     assert classifier.paths[1:] == [str(joy), str(sadness)]
+
+
+def test_emotion_benchmark_rejects_mock_manifest_before_inference(tmp_path):
+    module = _load_script("benchmark_emotion_models")
+    (tmp_path / "manifest.json").write_text(
+        '{"samples":[{"sample_id":"mock-1","source":"mock",'
+        '"audio_path":"audio/mock.wav","true_emotion":"joy"}]}',
+        encoding="utf-8",
+    )
+
+    benchmark = module.EmotionModelBenchmark(str(tmp_path))
+
+    with pytest.raises(ValueError, match="mock/synthetic"):
+        benchmark.load_testset()
 
 
 def test_streaming_latency_records_first_token_and_completion():

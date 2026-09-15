@@ -1,154 +1,149 @@
-# 语音认知筛查服务（交付包）
+# LMCA Share — 语音认知筛查服务
 
-> 项目文档：[产品概览](docs/product-brief.md)、[架构设计](docs/design-system.md)、[Memobase 与情绪实验指南](docs/guides/memobase-emotion-experiment-guide.md)。历史交接记录已归档至 `docs/archive/`，不代表当前状态。
+面向临床与照护场景的低压力语音认知筛查服务。患者通过语音完成引导式对话任务；服务负责实时语音交互、筛查会话状态、打断恢复、评分、历史记录和长期记忆。
 
-面向临床/照护场景的**低压力语音认知筛查**服务。医护人员通过手机大小的界面引导患者完成 MMSE 式对话任务，系统负责语音交互、状态管理、打断恢复、评分与会话历史；患者全程只用语音参与，不需要看屏或操作。
+> 这是一个**代码仓库**，不包含真实密钥、患者数据、录音、运行日志、私有证书或大模型权重。请先阅读本文的「安全与发布边界」再发布或部署。
 
-本包是从完整开发目录裁剪出的**交付版**（约 3.9 GB，原目录 40 GB）。已去掉虚拟环境、训练产物、运行数据和真实密钥，只保留运行所需的代码与模型。详见文末「本包裁剪了什么」。
+## 功能概览
 
----
+- FastAPI 服务，默认端口为 `8502`；提供浏览器界面、WebRTC 与兼容 WebSocket 接入。
+- 云端 ASR/TTS 与 LLM 编排，支持火山引擎语音、阿里云百炼，以及 SiliconFlow 回退。
+- 语音筛查会话与评分流程，包含声纹验证、记忆检索和会话持久化。
+- 可选 SoulX-Duplug 全双工轮次判断，实现用户打断和恢复播放。
+- 可选本地 Memobase、PostgreSQL 和 Redis，用于长期记忆；未启用时可使用本地回退路径。
 
-## 1. 这个项目是干什么的
+## 代码结构
 
-- **服务入口**：`voice_server.py`，FastAPI 应用，默认监听端口 **8502**，同时支持 WebRTC 和兼容用的 WebSocket 接入。
-- **对话流程**：每条连接有独立的会话与筛查 Agent，编排 ASR → Agent → TTS → 评分 → 持久化的完整回合。
-- **语音识别 / 合成 / 大模型**：正式回复默认走阿里云百炼 `qwen3.7-flash`，会话长期整理走 `qwen-plus`；语音 ASR/TTS 使用火山引擎。SiliconFlow 保留为未配置百炼时的 LLM 回退，也可切换为本地 ASR（SenseVoice）/本地 TTS（ZipVoice）。
-- **声纹验证**：本地 ONNX 模型（ERes2NetV2 中文 / WeSpeaker），确认是否为同一说话人。
-- **全双工打断**：可选接入外部 **SoulX-Duplug** 服务做语义轮次判断（见第 5 节，属外部依赖，本包不含）。
+- `voice_server.py`：FastAPI 服务入口与依赖装配。
+- `src/voice/`：实时连接、会话、媒体处理、播放控制与持久化。
+- `src/voice/handlers/`：按消息和音频事件拆分的处理器。
+- `src/agents/`：认知筛查流程、会话状态和领域策略。
+- `src/context_management/`：长期记忆、检索与缓存。
+- `src/tools/`：模型、语音和外部服务适配层。
+- `src/web/`、`static/`：登录、管理、历史记录与语音对话页面。
+- `tests/`：单元测试和集成边界测试。
+- `docs/`：架构、部署、接口和实验文档。
 
-### 目录职责
+## 环境要求
 
-| 路径 | 职责 |
-| --- | --- |
-| `voice_server.py` | 服务组合入口，负责配置、依赖组装、FastAPI 生命周期和 WebRTC 接入 |
-| `src/voice/` | 连接、会话、媒体、运行时、持久化和语音业务 |
-| `src/voice/handlers/` | 按消息类型拆分的处理对象 |
-| `src/web/` | 登录、管理页面、公开 API 和 HTTP 路由 |
-| `src/agents/screening/` | 筛查状态、任务规划、回合阶段和领域策略 |
-| `src/tools/` | Agent、检索、语音等外部能力适配器 |
-| `src/context_management/` | 患者长期记忆和上下文策略 |
-| `static/` | 浏览器页面和静态资源（含 `voice_chat.html`） |
-| `kb/` | 检索知识库文本切片（RAG 用） |
-| `models/` | 本地 ONNX / TTS 模型（见第 4 节） |
-| `docs/` | 部署、公开 API、SoulX、声纹、WebRTC 文档 |
-| `tests/` | 自动化测试 |
+- Python 3.11
+- 本地运行需安装 `ffmpeg` 与 `libsndfile1`
+- Docker 部署需要 Docker Compose
+- 生产模式需要相应云服务的账号与密钥；没有 SoulX 时可关闭该功能
 
-建议阅读顺序：[产品概览](docs/product-brief.md) → [架构设计](docs/design-system.md) → `voice_server.py` → `src/voice/application.py`。
+## 快速启动
 
----
-
-## 2. 环境要求
-
-- Python **3.11**（Dockerfile 用的就是 3.11-slim）
-- 系统依赖：`ffmpeg`、`libsndfile1`（Docker 已内置；本地部署需自行安装）
-- 云端 API 账号：阿里云百炼（正式回复、长期整理和 Memobase）、火山引擎豆包语音；SiliconFlow 仅作 LLM 回退（见第 6 节密钥）
-- 纯 API 模式**不需要 GPU**；仅在启用本地 TTS（ZipVoice）或本地 ASR 时才需要
-
----
-
-## 3. 如何部署
-
-### 方式 A：Docker（推荐，纯 API 模式）
-
-```powershell
-# 1. 准备密钥（本包只带了模板，没有真实密钥）
-Copy-Item .env.example .env
-# 编辑 .env，填入阿里云百炼和火山引擎豆包的实际 Key（见第 6 节）
-
-# 2. 构建并启动
-docker compose up -d --build
-
-# 3. 健康检查
-Invoke-WebRequest http://localhost:8502/health
-```
-
-访问 `http://<服务器IP>:8502/`。注意 `docker-compose.yml` 会挂载 `./data`、`./tmp`，首次启动会自动创建。Silero VAD 模型在构建镜像时自动下载，不依赖本包里的 `models/silero_vad.onnx`。
-
-根目录 Compose 还包含本地 Memobase API、PostgreSQL 和 Redis；启动前需在 `.env` 中填写 `DASHSCOPE_API_KEY`，并让 `ACCESS_TOKEN` 与 `MEMOBASE_API_KEY` 保持相同。完整 Compose 启动时，语音服务通过固定的 Docker 服务名连接本地 Memobase；仅需语音服务及 SQLite 回退时，可执行 `docker compose up -d --build voice-server`。完整的部署、健康检查和数据备份边界见 [docs/memobase-local.md](docs/memobase-local.md)。
-
-语音和记忆管理使用同一个用户界面：访问 `http://127.0.0.1:8502/`，登录后从语音页面抽屉进入“记忆管理”。不需要单独启动 `frontend` 的 Vite 开发服务器或访问 `5173`；`frontend/` 仅保留用于源码维护和构建验证。
-
-### 方式 B：本地脚本运行
+### Docker（推荐）
 
 ```bash
-# 1. 建虚拟环境并装依赖（本包不含虚拟环境）
-python3.11 -m venv luyang
-source luyang/bin/activate
-pip install -r requirements.txt
+cp .env.example .env
+# 编辑 .env，填写本机或部署环境自己的密钥与地址
+docker compose up -d --build voice-server
+curl http://127.0.0.1:8502/health
+```
 
-# 2. 准备密钥
-cp .env.example .env   # 然后编辑填入真实 Key
+若需要本地 Memobase、PostgreSQL 和 Redis，运行完整 Compose：
 
-# 3. 启动
+```bash
+docker compose up -d --build
+```
+
+详细的本地记忆部署与备份边界见 [docs/memobase-local.md](docs/memobase-local.md)。
+
+### 本地 Python 环境
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp .env.example .env
+# 编辑 .env 后启动
 bash start_voice_only.sh
 ```
 
-`start_voice_only.sh` 会自动定位 Python、设置 `PYTHONPATH`、清理旧进程，并在 `USE_SOULX_TURN_TAKING=true` 时尝试拉起 SoulX 轮次服务。**如果没有 SoulX 环境**，请在 `.env` 里设 `USE_SOULX_TURN_TAKING=false` 再启动，否则脚本会因找不到 SoulX 而退出。
+`start_voice_only.sh` 在 `USE_SOULX_TURN_TAKING=true` 时会尝试连接或启动 SoulX。没有该外部服务时，请在 `.env` 中设置 `USE_SOULX_TURN_TAKING=false`。SoulX 的独立部署说明见 [docs/soulx_8502_integration.md](docs/soulx_8502_integration.md)。
 
-> 脚本里 `SOULX_DIR`、`SOULX_PYTHON`、`CUDA_HOME=/usr/local/cuda-11.8` 等是原机器的绝对路径，换机器需按实际环境改，或直接用 Docker 方式绕开。
+## 配置与安全
 
----
+从模板创建本地配置，绝不把真实配置加入 Git：
 
-## 4. 本包包含的模型（`models/`，共约 3.7 GB）
+```bash
+cp .env.example .env
+```
 
-| 模型 | 大小 | 用途 |
-| --- | --- | --- |
-| `bge-reranker-base/` | 2.1 G | RAG 精排（`RAG_FUSION_ENABLE_RERANKING=true` 时用） |
-| `zipvoice_distill/` | 1.5 G | 本地 TTS（`USE_ARK_TTS=false` 时用） |
-| `vocos-mel-24khz/` | 104 M | ZipVoice 声码器 |
-| `eres2netv2-cn/` | 69 M | 声纹验证（默认，中文 20 万说话人） |
-| `wespeaker-cnceleb/` | 26 M | 声纹验证（`resnet34` 快速回退） |
-| `silero_vad.onnx` | 2.3 M | 语音活动检测（VAD） |
+以下内容只能保留在部署机器、密码管理器或受控对象存储中，**不得提交或上传到 GitHub**：
 
-`silero_vad.onnx` 原开发目录 `models/` 里没有（代码从 torch 缓存加载），本包已从缓存补入，本地运行开箱即用。
+- `.env`、`.env.*`、历史 `.env` 备份，以及任何 API Key、Token、数据库密码。
+- `certs/` 中的 TLS 私钥与证书。
+- `data/` 中的患者资料、对话、录音、评分和导出数据。
+- `tmp/`、日志、缓存、SQLite/向量索引与运行期生成的文件。
+- 本地模型、训练产物、下载的权重和大型二进制文件。
+- 临时调试脚本、编辑器备份及实验过程中生成的原始结果。
 
----
+`.gitignore` 已覆盖这些常见本机文件；每次提交前仍应检查暂存区：
 
-## 5. 缺少什么 / 需要自行准备
+```bash
+git status --short
+git diff --cached --name-only
+git check-ignore -v .env certs/voice_server.key
+```
 
-裁剪时刻意去掉了这些，接收方需要自己补：
+若密钥曾经提交到任何分支或远程仓库，请立即在服务商后台撤销并重新生成；仅删除文件不能使旧密钥失效。
 
-1. **Python 虚拟环境** — 本包不含，按第 3 节 `pip install -r requirements.txt` 重建。
-2. **真实密钥 `.env`** — 只带了 `.env.example` / `.env.cloudflare.example` 模板，出于安全没带真实密钥。必须自己填（第 6 节）。
-3. **SoulX-Duplug 服务** — 全双工打断/语义轮次判断依赖的外部服务（原机器在 `/home/luy/luyang/pause/SoulX-Duplug-main`，单独的 conda 环境 + GPU）。**本包不含**。不需要它时把 `.env` 里 `USE_SOULX_TURN_TAKING=false` 即可正常运行。详见 `docs/soulx_8502_integration.md`。
-4. **运行数据 `data/`** — 历史语音录音、评分、对话记录等，属隐私数据未带。服务首次运行会自动创建空目录。
-5. **知识库原始来源** — 本包带了 `kb/` 切片文本；若要重建向量库需自行处理。
+## 大文件策略
 
-### 本包裁剪了什么（相对原 40 GB 开发目录）
+代码仓库只保存源代码、配置模板、文档、测试以及运行必需且体积可控的静态依赖。模型权重、录音、患者数据、数据库转储和实验原始输出不上传。
 
-- `luyang/`（Python 虚拟环境，8.9 G）
-- 代码中 0 引用的模型：`ad_resistance_detector_multiclass/`（21 G，抗性检测实际走云端 API `RESISTANCE_MODEL`）、`resistance_detector_4class/`、`resistance_detector_innovative/`、`spkrec-ecapa-voxceleb/`
-- `data/`（运行数据，含语音录音）、`tmp/`（日志）、`delivery/`（旧打包）、`__pycache__/`
-- 真实密钥文件 `.env`、`.env.cloudflare`、`.env.storage`
+需要共享大模型或数据时，使用受控对象存储、机构文件服务或发布页下载链接，并在文档中记录校验和与获取方式。只有确实需要由 Git 版本化、单个文件又超过常规代码体量的资源，才在取得仓库管理员同意后使用 Git LFS；不要把数据集或密钥放进 LFS。
 
----
+当前已纳入 `static/vendor/` 的前端静态运行依赖会保留，因为页面会在运行时直接加载它们；其余可再生成、可下载或含隐私的数据不应添加。
 
-## 6. 必填密钥（`.env`）
+## 测试
 
-编辑 `.env`，重点填以下几项（完整说明见 `.env.example` 注释）：
+```bash
+python -m pip install -r requirements.txt -r requirements-test.txt
+python -m pytest -q
+```
 
-| 变量 | 说明 |
-| --- | --- |
-| `DASHSCOPE_API_KEY` | 阿里云百炼 Key；正式回复、长期整理和本地 Memobase 都需要 |
-| `DASHSCOPE_CHAT_MODEL` | 正式回复模型，默认 `qwen3.7-flash` |
-| `DASHSCOPE_CONSOLIDATION_MODEL` | 会话结束后的长期整理模型，默认 `qwen-plus` |
-| `SILICONFLOW_API_KEY` | 未配置百炼时的 LLM 回退 |
-| `VOLC_APP_ID` / `VOLC_ACCESS_TOKEN` | 火山引擎豆包语音（云端 ASR/TTS） |
-| `USE_ARK_ASR` / `USE_ARK_TTS` | 云端(true)还是本地(false) ASR/TTS |
-| `USE_SOULX_TURN_TAKING` | 没有 SoulX 服务时设为 `false` |
-| `PUBLIC_API_KEYS` | 对外 REST API（`/v1`）调用方 Key；不填会自动生成 bootstrap Key 到 `data/.public_api_key` |
+也可按领域运行：
 
-抗性检测走 `RESISTANCE_MODEL` 指定的云端模型（默认 `doubao-seed-2-0-mini`），对应厂商的 Key 也需配置。
+```bash
+python -m pytest -q tests/agents
+python -m pytest -q tests/voice
+python -m pytest -q tests/web
+python -m pytest -q tests/integrations
+```
 
----
+## 发布到 GitHub
 
-## 7. 相关文档
+已配置的 GitHub 远程仓库为 `github`。没有安装 GitHub CLI 时，可以直接使用 Git 的 HTTPS 凭据提示。先在 GitHub 网页创建一个只允许访问本仓库的 fine-grained personal access token：选择仓库 `Kong0426/lmca-share`，只授予 Repository permissions → Contents → Read and write。令牌只显示一次，不要写入文件或发到聊天中。
 
-- [产品概览](docs/product-brief.md) — 产品定位与设计原则
-- [架构设计](docs/design-system.md) — 服务架构
-- [Memobase 与情绪实验指南](docs/guides/memobase-emotion-experiment-guide.md) — 集成与验证
-- [公开 API](docs/public-api.md) — 对外 REST API
-- [声纹验证](docs/speaker-verification.md) — 声纹能力
-- [WebRTC 接入](docs/webrtc_migration.md) — 实时语音连接
-- [SoulX 集成](docs/soulx_8502_integration.md) — 全双工集成
-- [Cloudflare 部署](docs/cloudflare-deployment.md) — 公网入口
+在终端中执行：
+
+```bash
+cd /data/luyang/lmca-share
+
+# 仅在本仓库内存中暂存凭据，默认约 15 分钟后失效
+git config --local credential.helper 'cache --timeout=900'
+
+# 只添加已经检查过的文件；不要直接 git add .
+git add README.md .gitignore
+# 按审查结果逐个添加（下面只是示例，不要盲目复制）
+# git add src/voice/application.py tests/voice/test_voice_runtime.py
+git status --short
+# 忽略已审查的第三方静态构建文件中的格式提示
+git diff --cached --check -- . ':(exclude)static/vendor'
+git commit -m "feat: publish completed project"
+git push github main
+```
+
+`git push` 第一次询问时，Username 填你的 GitHub 用户名，Password 粘贴刚创建的 token（不是 GitHub 登录密码）。如果你安装了 GitHub CLI，也可以使用 `gh auth login` 和 `gh auth setup-git` 完成同样的登录流程。无论采用哪种方式，都不要使用不经检查的 `git add .`；其他文件必须先确认不含密钥/个人数据，也不是可重新生成或应存放在外部存储的大文件。更多令牌管理说明见 [GitHub 文档](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)。
+
+## 相关文档
+
+- [产品概览](docs/product-brief.md)
+- [架构设计](docs/design-system.md)
+- [公开 API](docs/public-api.md)
+- [Memobase 本地部署](docs/memobase-local.md)
+- [SoulX 全双工集成](docs/soulx_8502_integration.md)
+- [Cloudflare 部署](docs/cloudflare-deployment.md)

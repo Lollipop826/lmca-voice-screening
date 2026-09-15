@@ -15,6 +15,7 @@ _SOURCES = {
     "text_fallback_model_unavailable",
     "text_fallback_audio_missing",
     "text_fallback_audio_error",
+    "disabled",
     "unavailable",
 }
 
@@ -49,7 +50,7 @@ def _emotion_payload(
     raw_source = str(meta.get("source") or ("text_asr" if state == "provisional" else "unavailable"))
     source = raw_source if raw_source in _SOURCES else "unavailable"
     status = str(meta.get("analysis_status") or state).strip().lower()
-    if status not in {"provisional", "final", "unavailable"}:
+    if status not in {"provisional", "final", "disabled", "unavailable"}:
         status = "unavailable"
     audio_used = bool(meta.get("audio_model_used")) and source == "emotion2vec_audio+text"
     try:
@@ -81,6 +82,12 @@ def build_turn_insight(
     used_item_ids: list[str] | None = None,
     written_item_ids: list[str] | None = None,
     summary_changed: bool = False,
+    retrieval_source: str = "none",
+    retrieval_kind: str = "none",
+    retrieval_hit: bool = False,
+    retrieval_context_chars: int = 0,
+    retrieval_elapsed_ms: float = 0.0,
+    writes_enabled: bool = True,
     risk_decision: Any = None,
     risk_handled: bool = False,
 ) -> dict[str, Any]:
@@ -103,6 +110,14 @@ def build_turn_insight(
             "used_item_ids": [str(item) for item in (used_item_ids or []) if str(item)],
             "written_item_ids": [str(item) for item in (written_item_ids or []) if str(item)],
             "summary_changed": bool(summary_changed),
+            "retrieval_source": str(retrieval_source or "none"),
+            "retrieval_kind": str(retrieval_kind or "none"),
+            "retrieval_hit": bool(retrieval_hit),
+            "retrieval_context_chars": max(0, int(retrieval_context_chars or 0)),
+            "retrieval_elapsed_ms": round(
+                max(0.0, float(retrieval_elapsed_ms or 0.0)), 1
+            ),
+            "writes_enabled": bool(writes_enabled),
         },
         "risk": {
             "level": risk_level,

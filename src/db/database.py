@@ -1158,6 +1158,74 @@ def get_session_detail(session_id: str) -> Optional[Dict]:
         }
 
 
+def delete_session(session_id: str) -> Optional[Dict[str, Any]]:
+    """删除单个会话及其会话级数据，不改患者级档案或记忆快照。"""
+    session_id = str(session_id or "").strip()
+    if not session_id:
+        raise ValueError("session_id is required")
+
+    with get_conn() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        session = conn.execute(
+            "SELECT * FROM sessions WHERE session_id=?",
+            (session_id,),
+        ).fetchone()
+        if not session:
+            return None
+        if not session["ended_at"]:
+            raise ValueError("SESSION_ACTIVE")
+
+        table_exists = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        audio_paths = []
+        if "audio_files" in table_exists:
+            audio_paths = [
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT file_path FROM audio_files WHERE session_id=?",
+                    (session_id,),
+                ).fetchall()
+                if row[0]
+            ]
+
+        counts: Dict[str, int] = {}
+        for table in (
+            "messages",
+            "mmse_scores",
+            "audio_files",
+            "safety_events",
+            "emotion_memobase_turns",
+            "emotion_trajectory",
+            "emotion_memobase_session_reflections",
+        ):
+            if table not in table_exists:
+                continue
+            deleted = conn.execute(
+                f"DELETE FROM {table} WHERE session_id=?",
+                (session_id,),
+            ).rowcount
+            counts[table] = max(0, int(deleted))
+
+        counts["sessions"] = max(
+            0,
+            int(
+                conn.execute(
+                    "DELETE FROM sessions WHERE session_id=?",
+                    (session_id,),
+                ).rowcount
+            ),
+        )
+        return {
+            "session": dict(session),
+            "audio_paths": audio_paths,
+            "deleted_counts": counts,
+        }
+
+
 def get_audio_record(session_id: str, audio_id: int) -> Optional[Dict[str, Any]]:
     with get_conn() as conn:
         row = conn.execute(

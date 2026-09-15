@@ -10,4 +10,4 @@ class SpeechTurnConfig:
     use_ark_tts: bool
     use_llm_streaming: bool
     vision_lock_timeout: float = 30.0
-    memory_timeout_s: float = 3.0
+    memory_timeout_s: float = 0.25

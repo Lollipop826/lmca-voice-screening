@@ -33,6 +33,7 @@ class ScreeningSessionLifecycle:
         patient_id: str,
         score: int,
         weak_dimensions: list[str] | None = None,
+        session_id: str | None = None,
     ) -> bool:
         memory = self._mmse_memory
         if callable(memory) and not hasattr(memory, "update_mmse_score"):
@@ -40,7 +41,13 @@ class ScreeningSessionLifecycle:
         updater = getattr(memory, "update_mmse_score", None)
         if not callable(updater) or not patient_id:
             return False
-        updater(patient_id, score, weak_dimensions or [])
+        if session_id:
+            try:
+                updater(patient_id, score, weak_dimensions or [], session_id=session_id)
+            except TypeError:
+                updater(patient_id, score, weak_dimensions or [])
+        else:
+            updater(patient_id, score, weak_dimensions or [])
         return True
 
     def reset(self, session_id: str) -> None:

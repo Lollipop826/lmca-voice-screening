@@ -14,10 +14,12 @@ class ManualInterruptHandler:
         session,
         stop_playback: Callable[[], Any],
         reset_interrupt_capture: Callable[..., Any],
+        interrupt_active_processing: Callable[..., Any] | None = None,
         logger=print,
     ) -> None:
         self.session = session
         self._stop_playback = stop_playback
+        self._interrupt_active_processing = interrupt_active_processing
         self._reset_interrupt_capture = reset_interrupt_capture
         self._log = logger
 
@@ -25,7 +27,12 @@ class ManualInterruptHandler:
         if message.get("type") != "interrupt":
             return False
         self._log("\n[打断] 用户手动请求打断")
-        await self._await_if_needed(self._stop_playback())
+        if self._interrupt_active_processing is not None:
+            await self._await_if_needed(
+                self._interrupt_active_processing("用户手动请求打断")
+            )
+        else:
+            await self._await_if_needed(self._stop_playback())
         reset_result = self._reset_interrupt_capture(
             reset_waiting=True,
             reset_vad=True,

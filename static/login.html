@@ -3,685 +3,74 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>登录 · 记忆守护</title>
+    <title>登录 · 心语陪伴</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --bg: #f6f8fa;
-            --surface: #ffffff;
-            --border: #e3e8ef;
-            --border-strong: #cdd5df;
-            --text: #10213a;
-            --text-muted: #5b6876;
-            --text-soft: #8a95a3;
-            --accent: #0f9b8e;
-            --accent-hover: #0b8074;
-            --accent-soft: #dff4f1;
-            --tech: #2f6fed;
-            --tech-soft: #e6efff;
-            --danger: #b42318;
-            --danger-soft: #fdecec;
-            --success: #0a7a4b;
-            --success-soft: #e7f5ee;
-            --info: #1a5fb4;
-            --info-soft: #e8eff9;
-            --paper: #fbfaf6;
-            --cream: #efe3d0;
-            --paper-warm: #f8f2e8;
-            --radius: 12px;
-            --font: 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            --font-display: 'Noto Serif SC', 'Noto Sans SC', serif;
-        }
-
-        * { box-sizing: border-box; }
-
-        html, body {
-            margin: 0;
-            padding: 0;
-            background: var(--bg);
-            color: var(--text);
-            font-family: var(--font);
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
-        }
-
-        body {
-            min-height: 100vh;
-            overflow-x: hidden;
-        }
-
-        .layout {
-            min-height: 100vh;
-            display: grid;
-            grid-template-columns: 1.15fr 0.95fr;
-        }
-
-        /* -------- 左侧：品牌展示区 -------- */
-        .hero {
-            position: relative;
-            overflow: hidden;
-            padding: 48px 56px;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            background:
-                radial-gradient(900px 520px at 10% 0%, rgba(15, 155, 142, 0.11), transparent 60%),
-                radial-gradient(740px 500px at 105% 112%, rgba(217, 119, 6, 0.13), transparent 58%),
-                linear-gradient(155deg, var(--paper) 0%, var(--cream) 48%, var(--paper-warm) 100%);
-        }
-
-        .hero::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background-image:
-                linear-gradient(rgba(91, 74, 50, 0.05) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(91, 74, 50, 0.05) 1px, transparent 1px);
-            background-size: 44px 44px;
-            mask-image: radial-gradient(1000px 700px at 30% 40%, black, transparent 75%);
-            -webkit-mask-image: radial-gradient(1000px 700px at 30% 40%, black, transparent 75%);
-            pointer-events: none;
-        }
-
-        .hero-glow {
-            position: absolute;
-            border-radius: 999px;
-            filter: blur(70px);
-            opacity: 0.5;
-            pointer-events: none;
-        }
-        .hero-glow.a {
-            width: 340px;
-            height: 340px;
-            background: rgba(15, 155, 142, 0.35);
-            top: -80px;
-            left: -80px;
-            animation: floatY 11s ease-in-out infinite;
-        }
-        .hero-glow.b {
-            width: 420px;
-            height: 420px;
-            background: rgba(47, 111, 237, 0.28);
-            bottom: -140px;
-            right: -120px;
-            animation: floatY 14s ease-in-out infinite reverse;
-        }
-        @keyframes floatY {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-24px); }
-        }
-
-        .hero-top,
-        .hero-main,
-        .hero-bottom {
-            position: relative;
-            z-index: 1;
-        }
-
-        .brand {
-            display: inline-flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 0.95rem;
-            font-weight: 600;
-            color: var(--text);
-            letter-spacing: -0.01em;
-        }
-
-        .brand-mark {
-            width: 30px;
-            height: 30px;
-            border-radius: 9px;
-            background: linear-gradient(135deg, var(--accent), #1eb6a5);
-            color: white;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 14px;
-            box-shadow: 0 6px 18px rgba(15, 155, 142, 0.25);
-        }
-
-        .meta-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 12px;
-            border: 1px solid var(--border);
-            background: rgba(255, 255, 255, 0.72);
-            backdrop-filter: blur(8px);
-            border-radius: 999px;
-            font-size: 0.78rem;
-            color: var(--text-muted);
-        }
-
-        .meta-chip .dot {
-            width: 7px;
-            height: 7px;
-            border-radius: 50%;
-            background: var(--accent);
-            box-shadow: 0 0 0 4px rgba(15, 155, 142, 0.16);
-            animation: pulse 2.2s ease-in-out infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); opacity: 1; }
-            50%      { transform: scale(1.15); opacity: 0.75; }
-        }
-
-        .hero-main {
-            margin: 56px 0;
-            max-width: 700px;
-        }
-
-        .kicker {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 12px;
-            border-radius: 999px;
-            background: var(--tech-soft);
-            color: var(--tech);
-            font-size: 0.78rem;
-            font-weight: 600;
-            letter-spacing: 0.02em;
-            margin-bottom: 22px;
-        }
-
-        .hero-title {
-            margin: 0 0 18px;
-            font-family: var(--font-display);
-            font-size: clamp(3.5rem, 7vw, 6.5rem);
-            line-height: 0.98;
-            letter-spacing: -0.045em;
-            font-weight: 700;
-            color: var(--text);
-            text-wrap: balance;
-        }
-
-        .hero-title em {
-            font-style: normal;
-            color: var(--accent);
-        }
-
-        .hero-desc {
-            margin: 0 0 0 -8px;
-            font-size: 1.5rem;
-            font-style: italic;
-            line-height: 1.55;
-            color: var(--text-muted);
-            max-width: 620px;
-        }
-
-        /* 关键词气泡流（左右对流） */
-        .marquees {
-            display: flex;
-            flex-direction: column;
-            gap: 14px;
-            margin-top: -10px;
-            transform: translateX(18px) rotate(-1deg);
-            padding: 2px 0;
-            /* 用遮罩实现左右边缘淡出 */
-            -webkit-mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent);
-            mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent);
-        }
-
-        .marquee {
-            position: relative;
-            display: flex;
-            overflow: hidden;
-            white-space: nowrap;
-        }
-
-        .marquee .track {
-            display: flex;
-            gap: 10px;
-            padding-right: 10px;
-            animation: scroll-left 38s linear infinite;
-        }
-
-        .marquee.reverse .track {
-            animation-name: scroll-right;
-            animation-duration: 46s;
-        }
-
-        @keyframes scroll-left {
-            from { transform: translateX(0); }
-            to   { transform: translateX(-50%); }
-        }
-        @keyframes scroll-right {
-            from { transform: translateX(-50%); }
-            to   { transform: translateX(0); }
-        }
-
-        .pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 9px 14px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.85);
-            border: 1px solid var(--border);
-            color: var(--text);
-            font-size: 0.82rem;
-            font-weight: 500;
-            letter-spacing: 0.01em;
-            box-shadow: 0 4px 14px rgba(16, 33, 58, 0.04);
-            backdrop-filter: blur(6px);
-            flex-shrink: 0;
-        }
-
-        .pill i {
-            color: var(--accent);
-            font-size: 0.78rem;
-        }
-
-        .pill.tech i  { color: var(--tech); }
-        .pill.warm i  { color: #d97706; }
-        .pill.rose i  { color: #be185d; }
-        .pill.indigo i{ color: #4f46e5; }
-
-        .pill.solid {
-            background: var(--text);
-            border-color: var(--text);
-            color: white;
-        }
-        .pill.solid i { color: #7bd3c8; }
-
-        .hero-bottom {
-            display: flex;
-            gap: 22px;
-            align-items: center;
-            color: var(--text-muted);
-            font-size: 0.82rem;
-        }
-
-        .hero-bottom strong {
-            color: var(--text);
-            font-weight: 600;
-        }
-
-        /* -------- 右侧：登录卡 -------- */
-        .auth-side {
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            background: var(--surface);
-            border-left: 1px solid var(--border);
-        }
-
-        .auth-top {
-            display: flex;
-            justify-content: flex-end;
-            padding: 22px 28px;
-        }
-
-        .legacy-link {
-            font-size: 0.85rem;
-            color: var(--text-muted);
-            text-decoration: none;
-            border: 1px solid var(--border);
-            padding: 7px 14px;
-            border-radius: 999px;
-            transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .legacy-link:hover {
-            color: var(--text);
-            border-color: var(--border-strong);
-            background: var(--bg);
-        }
-
-        .auth-shell {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 20px 28px 60px;
-        }
-
-        .card {
-            width: 100%;
-            max-width: 400px;
-        }
-
-        .card-head {
-            margin-bottom: 26px;
-        }
-
-        .title {
-            margin: 0 0 8px;
-            font-size: 1.75rem;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-            color: var(--text);
-        }
-
-        .subtitle {
-            margin: 0;
-            font-size: 0.92rem;
-            color: var(--text-muted);
-        }
-
-        .tabs {
-            display: flex;
-            gap: 2px;
-            padding: 4px;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            margin-bottom: 22px;
-        }
-
-        .tab {
-            flex: 1;
-            border: none;
-            background: transparent;
-            padding: 9px 12px;
-            font-family: inherit;
-            font-size: 0.9rem;
-            font-weight: 500;
-            color: var(--text-muted);
-            border-radius: 9px;
-            cursor: pointer;
-            transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
-        }
-
-        .tab.active {
-            background: white;
-            color: var(--text);
-            box-shadow: 0 1px 2px rgba(16, 33, 58, 0.06);
-        }
-
-        .panel {
-            display: none;
-        }
-
-        .panel.active {
-            display: block;
-        }
-
-        .field {
-            margin-bottom: 14px;
-        }
-
-        .field label {
-            display: block;
-            margin-bottom: 6px;
-            font-size: 0.82rem;
-            font-weight: 500;
-            color: var(--text);
-        }
-
-        .field input {
-            width: 100%;
-            padding: 11px 14px;
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            background: white;
-            color: var(--text);
-            font-size: 0.95rem;
-            font-family: inherit;
-            outline: none;
-            transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
-        }
-        .field input::placeholder { color: var(--text-soft); }
-        .field input:hover { border-color: var(--border-strong); }
-        .field input:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-soft);
-        }
-
-        .row-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-        }
-
-        .submit {
-            width: 100%;
-            margin-top: 6px;
-            padding: 11px 14px;
-            border: 1px solid var(--accent);
-            border-radius: 7px;
-            background: var(--accent);
-            color: #ffffff;
-            font-family: inherit;
-            font-size: 0.95rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
-            box-shadow: none;
-        }
-        .submit:hover {
-            background: #ffffff;
-            color: var(--accent);
-            border-color: var(--accent);
-            transform: translateY(-1px);
-        }
-        .submit:disabled { opacity: 0.65; cursor: wait; transform: none; }
-
-        .helper {
-            margin-top: 14px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            font-size: 0.82rem;
-            color: var(--text-muted);
-        }
-
-        .helper a,
-        .helper .link-btn {
-            color: var(--accent);
-            text-decoration: none;
-            background: none;
-            border: none;
-            padding: 0;
-            font-family: inherit;
-            font-size: inherit;
-            cursor: pointer;
-        }
-        .helper a:hover,
-        .helper .link-btn:hover { text-decoration: underline; }
-
-        .status {
-            margin-top: 14px;
-            display: none;
-            padding: 10px 12px;
-            border-radius: 8px;
-            font-size: 0.86rem;
-            line-height: 1.55;
-            border: 1px solid transparent;
-        }
-        .status.show { display: block; }
-        .status.error   { background: var(--danger-soft); color: var(--danger); border-color: rgba(180, 35, 24, 0.18); }
-        .status.success { background: var(--success-soft); color: var(--success); border-color: rgba(10, 122, 75, 0.2); }
-        .status.info    { background: var(--info-soft); color: var(--info); border-color: rgba(26, 95, 180, 0.2); }
-
-        .auth-footer {
-            padding: 20px 28px 28px;
-            text-align: center;
-            font-size: 0.78rem;
-            color: var(--text-soft);
-        }
-
-        /* -------- 响应式 -------- */
-        @media (max-width: 1024px) {
-            .layout {
-                grid-template-columns: 1fr;
-            }
-            .auth-side {
-                border-left: none;
-                border-top: 1px solid var(--border);
-            }
-            .hero {
-                padding: 40px 32px 32px;
-            }
-            .hero-main {
-                margin: 32px 0;
-            }
-            .hero-title {
-                font-size: clamp(3.1rem, 10vw, 5.5rem);
-            }
-            .hero-desc {
-                font-size: 1.32rem;
-            }
-        }
-
-        @media (max-width: 560px) {
-            .hero { padding: 28px 20px 24px; }
-            .hero-top {
-                gap: 14px;
-                align-items: flex-start !important;
-            }
-            .brand {
-                align-items: flex-start;
-            }
-            .meta-chip {
-                flex-shrink: 0;
-                max-width: 134px;
-                white-space: normal;
-                line-height: 1.2;
-            }
-            .auth-top { padding: 16px 20px; }
-            .auth-shell { padding: 8px 20px 40px; }
-            .row-2 { grid-template-columns: 1fr; }
-            .title { font-size: 1.5rem; }
-            .hero-title {
-                font-size: clamp(2.35rem, 13.2vw, 3.7rem);
-                letter-spacing: -0.035em;
-            }
-            .hero-desc {
-                margin-left: 0;
-                font-size: 1.08rem;
-            }
-            .marquees {
-                margin-top: 20px;
-                transform: translateX(10px) rotate(-0.6deg);
-            }
-        }
-    </style>
+    <link rel="stylesheet" href="/static/vendor/fontawesome/css/all.min.css">
+    <meta name="theme-color" content="#edf5ef">
+    <link rel="stylesheet" href="/static/companion_ui.css?v=20260914-unified-1">
+    <script src="/static/companion_ui.js?v=20260914-unified-1" defer></script>
 </head>
-<body>
+<body class="companion-page login-page">
+    <a class="ui-skip-link" href="#auth-main">跳到登录表单</a>
     <div class="layout">
         <!-- 左侧：品牌展示 -->
         <aside class="hero">
-            <div class="hero-glow a"></div>
-            <div class="hero-glow b"></div>
 
-            <div class="hero-top" style="display:flex;justify-content:space-between;align-items:center;">
+            <div class="hero-top">
                 <div class="brand">
-                    <span class="brand-mark"><i class="fas fa-stethoscope"></i></span>
-                    <span>记忆守护 · Memory Guardian</span>
-                </div>
-                <div class="meta-chip">
-                    <span class="dot"></span>
-                    <span>Clinical AI · Online</span>
+                    <span class="brand-mark"><i class="fas fa-heart-pulse"></i></span>
+                    <span>心语陪伴</span>
                 </div>
             </div>
 
             <div class="hero-main">
                 <span class="kicker">
-                    <i class="fas fa-microchip"></i>
-                    AI Cognitive Screening Platform
+                    <i class="fas fa-heart"></i>
+                    心理健康陪伴
                 </span>
                 <h1 class="hero-title">
-                    为医疗场景而生的<br>
-                    <em>智能认知评估</em>工作台
+                    让日常心事<br>
+                    <em>有人倾听</em>
                 </h1>
                 <p class="hero-desc">
-                    面向门诊与病房，一个入口连接 AI 对话筛查、历史追踪与旧系统采集。
-                    围绕真实医患流程设计，既保持临床稳重，也具备现代产品的响应与质感。
+                    通过语音交流、长期记忆和情绪回顾，陪您梳理日常感受。
+                    按自己的节奏聊一聊，让每一次对话都能延续。
                 </p>
             </div>
 
             <div>
-                <!-- 关键词气泡：左右对流 -->
-                <div class="marquees" aria-hidden="true">
-                    <div class="marquee">
-                        <div class="track">
-                            <span class="pill"><i class="fas fa-brain"></i>MMSE 认知评估</span>
-                            <span class="pill tech"><i class="fas fa-microphone-lines"></i>语音实时交互</span>
-                            <span class="pill"><i class="fas fa-heart-pulse"></i>情绪与语义分析</span>
-                            <span class="pill warm"><i class="fas fa-notes-medical"></i>MoCA 复测支持</span>
-                            <span class="pill"><i class="fas fa-wave-square"></i>语音样本采集</span>
-                            <span class="pill indigo"><i class="fas fa-bolt"></i>流式 TTS 反馈</span>
-                            <!-- 复制一份以实现无缝滚动 -->
-                            <span class="pill"><i class="fas fa-brain"></i>MMSE 认知评估</span>
-                            <span class="pill tech"><i class="fas fa-microphone-lines"></i>语音实时交互</span>
-                            <span class="pill"><i class="fas fa-heart-pulse"></i>情绪与语义分析</span>
-                            <span class="pill warm"><i class="fas fa-notes-medical"></i>MoCA 复测支持</span>
-                            <span class="pill"><i class="fas fa-wave-square"></i>语音样本采集</span>
-                            <span class="pill indigo"><i class="fas fa-bolt"></i>流式 TTS 反馈</span>
-                        </div>
-                    </div>
-                    <div class="marquee reverse">
-                        <div class="track">
-                            <span class="pill solid"><i class="fas fa-user-doctor"></i>临床级对话流程</span>
-                            <span class="pill"><i class="fas fa-shield-halved"></i>隐私与权限管理</span>
-                            <span class="pill rose"><i class="fas fa-chart-line"></i>维度雷达评分</span>
-                            <span class="pill"><i class="fas fa-clock-rotate-left"></i>历史会话追踪</span>
-                            <span class="pill tech"><i class="fas fa-link"></i>旧系统平滑衔接</span>
-                            <span class="pill"><i class="fas fa-earth-asia"></i>多语言支持</span>
-                            <span class="pill solid"><i class="fas fa-user-doctor"></i>临床级对话流程</span>
-                            <span class="pill"><i class="fas fa-shield-halved"></i>隐私与权限管理</span>
-                            <span class="pill rose"><i class="fas fa-chart-line"></i>维度雷达评分</span>
-                            <span class="pill"><i class="fas fa-clock-rotate-left"></i>历史会话追踪</span>
-                            <span class="pill tech"><i class="fas fa-link"></i>旧系统平滑衔接</span>
-                            <span class="pill"><i class="fas fa-earth-asia"></i>多语言支持</span>
-                        </div>
-                    </div>
-                    <div class="marquee">
-                        <div class="track">
-                            <span class="pill"><i class="fas fa-robot"></i>Function Calling Agent</span>
-                            <span class="pill warm"><i class="fas fa-eye"></i>视觉任务辅助</span>
-                            <span class="pill tech"><i class="fas fa-server"></i>边缘可私有部署</span>
-                            <span class="pill"><i class="fas fa-bell"></i>主动复述提醒</span>
-                            <span class="pill indigo"><i class="fas fa-code-branch"></i>多模型热切换</span>
-                            <span class="pill"><i class="fas fa-file-shield"></i>全量会话留痕</span>
-                            <span class="pill"><i class="fas fa-robot"></i>Function Calling Agent</span>
-                            <span class="pill warm"><i class="fas fa-eye"></i>视觉任务辅助</span>
-                            <span class="pill tech"><i class="fas fa-server"></i>边缘可私有部署</span>
-                            <span class="pill"><i class="fas fa-bell"></i>主动复述提醒</span>
-                            <span class="pill indigo"><i class="fas fa-code-branch"></i>多模型热切换</span>
-                            <span class="pill"><i class="fas fa-file-shield"></i>全量会话留痕</span>
-                        </div>
-                    </div>
+                <!-- 陪伴功能 -->
+                <div class="companion-capabilities" aria-label="陪伴功能">
+                    <span class="pill"><i class="fas fa-microphone-lines" aria-hidden="true"></i>语音陪伴</span>
+                    <span class="pill"><i class="fas fa-brain" aria-hidden="true"></i>长期记忆</span>
+                    <span class="pill"><i class="fas fa-heart-pulse" aria-hidden="true"></i>情绪回顾</span>
                 </div>
 
-                <div class="hero-bottom" style="margin-top:28px;">
-                    <span><strong>·</strong> 面向医生与科研的统一工作台</span>
-                    <span><strong>·</strong> 现代产品化交互</span>
-                    <span><strong>·</strong> 临床稳重视觉</span>
+                <div class="hero-bottom">
+                    <span><strong>·</strong> 按自己的节奏交流</span>
+                    <span><strong>·</strong> 记住重要的日常</span>
+                    <span><strong>·</strong> 回顾情绪变化</span>
                 </div>
             </div>
         </aside>
 
         <!-- 右侧：登录/注册 -->
-        <section class="auth-side">
-            <div class="auth-top">
-                <a class="legacy-link" href="/legacy" target="_blank" rel="noopener">
-                    <i class="fas fa-right-left"></i>
-                    <span>旧系统</span>
-                </a>
-            </div>
+        <main class="auth-side" id="auth-main" tabindex="-1">
+
 
             <div class="auth-shell">
                 <div class="card">
                     <div class="card-head">
-                        <h2 class="title">欢迎使用记忆守护</h2>
-                        <p class="subtitle">登录或注册以进入 AI 认知评估工作台</p>
+                        <h2 class="title">欢迎使用心语陪伴</h2>
+                        <p class="subtitle">登录或注册，开始今天的陪伴</p>
                     </div>
 
-                    <div class="tabs" role="tablist">
-                        <button id="tab-login" class="tab active" role="tab" aria-selected="true" type="button" onclick="switchMode('login')">登录</button>
-                        <button id="tab-register" class="tab" role="tab" aria-selected="false" type="button" onclick="switchMode('register')">注册</button>
+                    <div class="tabs" role="tablist" aria-label="登录或注册" data-keyboard-tabs>
+                        <button id="tab-login" class="tab active" role="tab" aria-selected="true" aria-controls="login-panel" tabindex="0" type="button" onclick="switchMode('login')">登录</button>
+                        <button id="tab-register" class="tab" role="tab" aria-selected="false" aria-controls="register-panel" tabindex="-1" type="button" onclick="switchMode('register')">注册</button>
                     </div>
 
-                    <div id="login-panel" class="panel active">
+                    <div id="login-panel" class="panel active" role="tabpanel" aria-labelledby="tab-login">
                         <form id="login-form" autocomplete="on">
                             <div class="field">
                                 <label for="login-username">账号</label>
@@ -699,16 +88,16 @@
                         </div>
                     </div>
 
-                    <div id="register-panel" class="panel">
+                    <div id="register-panel" class="panel" role="tabpanel" aria-labelledby="tab-register" hidden>
                         <form id="register-form" autocomplete="on">
                             <div class="row-2">
                                 <div class="field">
                                     <label for="register-username">用户名</label>
-                                    <input id="register-username" name="username" type="text" autocomplete="username" placeholder="如 doctor_zhang" required>
+                                    <input id="register-username" name="username" type="text" autocomplete="username" placeholder="如 xiaoyu_01" required>
                                 </div>
                                 <div class="field">
                                     <label for="register-display-name">显示名称</label>
-                                    <input id="register-display-name" name="display_name" type="text" autocomplete="name" placeholder="如 张医生" required>
+                                    <input id="register-display-name" name="display_name" type="text" autocomplete="name" placeholder="您希望被如何称呼" required>
                                 </div>
                             </div>
                             <div class="field">
@@ -727,28 +116,33 @@
                         </div>
                     </div>
 
-                    <div id="status-box" class="status"></div>
+                    <div id="status-box" class="status" role="status" aria-live="polite" aria-atomic="true"></div>
                 </div>
             </div>
 
             <div class="auth-footer">
-                © Memory Guardian · 面向医疗场景的 AI 认知评估
+                心语陪伴 · 心理健康陪伴
             </div>
-        </section>
+        </main>
     </div>
 
     <script>
         const NEXT_PATH = __NEXT_PATH__;
 
         function switchMode(mode) {
-            const isLogin = mode === 'login';
+            const isLogin = mode !== 'register';
             document.getElementById('tab-login').classList.toggle('active', isLogin);
             document.getElementById('tab-register').classList.toggle('active', !isLogin);
             document.getElementById('tab-login').setAttribute('aria-selected', String(isLogin));
             document.getElementById('tab-register').setAttribute('aria-selected', String(!isLogin));
             document.getElementById('login-panel').classList.toggle('active', isLogin);
             document.getElementById('register-panel').classList.toggle('active', !isLogin);
+            document.getElementById('tab-login').tabIndex = isLogin ? 0 : -1;
+            document.getElementById('tab-register').tabIndex = isLogin ? -1 : 0;
+            document.getElementById('login-panel').hidden = !isLogin;
+            document.getElementById('register-panel').hidden = isLogin;
             showStatus('', 'info');
+            document.getElementById(isLogin ? 'tab-login' : 'tab-register').focus();
         }
 
         function showStatus(message, type) {

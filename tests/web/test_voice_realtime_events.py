@@ -38,25 +38,26 @@ def test_voice_page_ignores_stale_playback_but_keeps_stop_controls():
 def test_voice_page_defaults_to_wellbeing_and_sends_session_mode():
     html = VOICE_HTML.read_text(encoding="utf-8")
 
-    assert "<title>记忆守护 · 心理健康陪伴</title>" in html
+    assert "<title>心语陪伴 · 心理健康陪伴</title>" in html
     assert '<body class="mode-wellbeing">' in html
-    assert "记忆守护 · 心理健康陪伴" in html
+    assert "心语陪伴 · 心理健康陪伴" in html
     assert "开始陪伴" in html
-    assert "let currentSessionMode = 'wellbeing';" in html
+    assert "const currentSessionMode = 'wellbeing';" in html
     assert "mode: currentSessionMode" in html
-    assert "if (!isCognitiveMode()) delete profile.education_years;" in html
+    assert "education_years" not in html
 
 
-def test_voice_page_hides_cognitive_ui_until_explicit_mode():
+def test_voice_page_removes_screening_controls_instead_of_hiding_them():
     html = VOICE_HTML.read_text(encoding="utf-8")
 
-    assert "body.mode-wellbeing [data-cognitive-only]" in html
-    assert 'id="education-group" class="input-group settings-grid-wide" data-cognitive-only' in html
-    assert 'id="score-settings-section"' in html
-    assert '<img id="drawing-ref-img" alt="参考五边形">' in html
-    assert '<img id="display-image" alt="认知筛查题目图片"' in html
+    for removed in (
+        "data-cognitive-only", "education-group", "score-settings-section",
+        "drawing-ref-img", "display-image", "doctor-pause-btn",
+        "toggleDoctorPromptMarker", "selectSessionMode", "isCognitiveMode",
+        "/api/mmse-image/", "html2canvas", "jspdf", "chart.js",
+    ):
+        assert removed not in html
     assert 'src=""' not in html
-    assert 'src="/api/mmse-image/pentagons"' not in html
 
 
 def test_voice_page_consumes_turn_insight_by_turn_id():
@@ -69,25 +70,25 @@ def test_voice_page_consumes_turn_insight_by_turn_id():
     assert "updateTurnRecord(data.turn_id || latestTurnId" in html
 
 
-def test_voice_page_ignores_cognitive_events_in_wellbeing_mode():
+def test_voice_page_ignores_legacy_screening_events_before_processing():
     html = VOICE_HTML.read_text(encoding="utf-8")
 
-    assert "data.type === 'update_score'" in html
-    assert "data.type === 'show_image'" in html
-    assert "data.type === 'vision_capture'" in html
-    assert "if (!isCognitiveMode(data.mode || currentSessionMode))" in html
-    assert "已忽略非认知会话评分事件" in html
-    assert "已忽略非认知会话题图" in html
-    assert "已忽略非认知会话视觉任务" in html
+    assert "const LEGACY_SCREENING_EVENT_TYPES = new Set([" in html
+    for event in ("update_score", "show_image", "vision_capture", "drawing_result"):
+        assert f"'{event}'" in html
+    handler = html[html.index("function handleMessage(data) {"):]
+    assert handler.splitlines()[1].strip() == "if (LEGACY_SCREENING_EVENT_TYPES.has(data.type)) return;"
+    assert "已忽略非认知" not in html
 
 
 def test_voice_page_uses_a_dedicated_memory_sidebar_and_drag_safe_log_button():
     html = VOICE_HTML.read_text(encoding="utf-8")
 
     assert 'id="memory-overlay"' in html
-    assert 'aria-label="记忆侧边栏"' in html
-    assert "panel.classList.toggle('open', shouldOpen)" in html
-    assert "overlay?.classList.toggle('open', shouldOpen)" in html
+    assert 'aria-labelledby="memory-panel-title"' in html
+    assert 'id="memory-panel-title"' in html
+    assert "setCompanionPanelOpen('memory-panel', shouldOpen" in html
+    assert "document.getElementById(overlayId)?.classList.toggle('open', open)" in html
     assert "const FAB_POSITION_KEY = 'debug_log_fab_position';" in html
     assert "fab.addEventListener('pointerdown'" in html
     assert "const textInputBar = document.getElementById('text-input-bar');" in html
@@ -116,3 +117,11 @@ def test_voice_page_keeps_the_initial_welcome_hint_compact():
     assert ".message-row.welcome-message .bubble" in html
     assert "background: #edf8f8 !important;" in html
     assert "border: 1px solid #c7e3e3 !important;" in html
+
+
+def test_voice_page_finishes_stream_without_decoding_missing_end_audio():
+    html = VOICE_HTML.read_text(encoding="utf-8")
+
+    assert "if (data.audio && streamingPlayer)" in html
+    assert "finishTtsPlaybackAfterEnd(data);" in html
+    assert "streamingPlayer.addChunk(data.audio, data.sample_rate);" not in html

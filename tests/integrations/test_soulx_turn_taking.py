@@ -14,6 +14,33 @@ from src.tools.voice.soulx_turn_taking import (
 
 
 class SoulXTurnTakingTests(unittest.TestCase):
+    def test_legacy_response_without_rms_is_unknown_instead_of_silent(self):
+        state = SoulXTurnState.from_message(json.dumps({
+            "type": "turn_state", "state": {"state": "nonidle"},
+        }))
+        self.assertIsNone(state.chunk_rms)
+
+    def test_missing_or_invalid_speech_detection_is_unknown_not_silence(self):
+        for value in (None, "false", 0):
+            with self.subTest(value=value):
+                state = SoulXTurnState.from_message(json.dumps({
+                    "type": "turn_state",
+                    "state": {
+                        "state": "idle", "detail_state": "incomplete",
+                        "speech_detected": value,
+                    },
+                }))
+                self.assertIsNone(state.speech_detected)
+        state = SoulXTurnState.from_message(json.dumps({
+            "type": "turn_state", "state": {"state": "idle"},
+        }))
+        self.assertIsNone(state.speech_detected)
+        state = SoulXTurnState.from_message(json.dumps({
+            "type": "turn_state",
+            "state": {"state": "idle", "speech_detected": False},
+        }))
+        self.assertIs(state.speech_detected, False)
+
     def test_turn_state_parses_soulx_protocol(self):
         state = SoulXTurnState.from_message(
             json.dumps(

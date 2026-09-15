@@ -3,6 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from src.web import (
     ApplicationHttpController,
@@ -106,6 +107,53 @@ class ApplicationHttpControllerTests(unittest.TestCase):
 
         self.assertEqual(result["count"], 1)
         self.assertEqual(result["patients"][0]["patient_id"], "pt-1")
+
+    def test_model_status_prefers_dashscope_over_configured_ark_fallback(self):
+        with TemporaryDirectory() as temp_dir:
+            controller = self._build_controller(temp_dir)
+            controller.environ.update({
+                "DASHSCOPE_API_KEY": "test-dashscope-key",
+                "DASHSCOPE_CHAT_MODEL": "qwen3.7-flash",
+                "ARK_API_KEY": "test-ark-key",
+            })
+            result = asyncio.run(controller.get_model())
+
+        self.assertEqual(result, {
+            "model": "qwen3.7-flash",
+            "options": ["qwen3.7-flash"],
+            "provider": "dashscope",
+        })
+
+    def test_dashscope_model_switch_cannot_report_a_false_ark_switch(self):
+        with TemporaryDirectory() as temp_dir:
+            controller = self._build_controller(temp_dir)
+            controller.environ.update({
+                "DASHSCOPE_API_KEY": "test-dashscope-key",
+                "ARK_API_KEY": "test-ark-key",
+            })
+            request = SimpleNamespace(json=AsyncMock(return_value={
+                "model": "doubao-seed-2-0-lite-260215",
+            }))
+            with patch("src.llm.http_client_pool.switch_ark_model") as switch:
+                result = asyncio.run(controller.switch_model(request))
+                switch.assert_not_called()
+
+            self.assertEqual(result.status_code, 400)
+            self.assertEqual(asyncio.run(controller.get_model())["model"], "qwen3.7-flash")
+
+    def test_ark_model_switch_still_uses_ark_when_dashscope_is_not_configured(self):
+        with TemporaryDirectory() as temp_dir:
+            controller = self._build_controller(temp_dir)
+            controller.environ["ARK_API_KEY"] = "test-ark-key"
+            selected = "doubao-seed-2-0-lite-260215"
+            request = SimpleNamespace(json=AsyncMock(return_value={"model": selected}))
+            with patch("src.llm.http_client_pool.switch_ark_model", return_value=selected) as switch:
+                result = asyncio.run(controller.switch_model(request))
+                switch.assert_called_once_with(selected)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["model"], selected)
+        self.assertEqual(result["provider"], "volcengine")
 
     def test_managed_audio_path_cannot_escape_voice_call_directory(self):
         with TemporaryDirectory() as temp_dir:

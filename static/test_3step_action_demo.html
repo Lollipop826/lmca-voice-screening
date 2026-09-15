@@ -3,73 +3,28 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MMSE 三步动作测试 Demo</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #020617; color: #e2e8f0; min-height: 100vh; }
-    .page { max-width: 1180px; margin: 0 auto; padding: 24px; }
-    h1 { font-size: 1.8rem; color: #38bdf8; margin-bottom: 8px; }
-    .subtitle { color: #94a3b8; margin-bottom: 20px; line-height: 1.7; }
-    .layout { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px; }
-    .panel { background: #0f172a; border: 1px solid #1e293b; border-radius: 16px; padding: 18px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
-    .panel h2 { font-size: 1.05rem; margin-bottom: 14px; color: #7dd3fc; }
-    video { width: 100%; background: #000; border-radius: 14px; aspect-ratio: 4 / 3; object-fit: cover; transform: scaleX(-1); }
-    .status { margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-size: 0.92rem; background: #172033; color: #cbd5e1; }
-    .status.ok { background: rgba(34,197,94,0.15); color: #86efac; }
-    .status.warn { background: rgba(245,158,11,0.15); color: #fcd34d; }
-    .status.err { background: rgba(239,68,68,0.15); color: #fca5a5; }
-    .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-    button { border: none; border-radius: 10px; padding: 10px 16px; cursor: pointer; font-size: 0.95rem; font-weight: 600; transition: transform .15s ease, opacity .15s ease; }
-    button:hover { transform: translateY(-1px); }
-    button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
-    .primary { background: #2563eb; color: #fff; }
-    .success { background: #16a34a; color: #fff; }
-    .danger { background: #dc2626; color: #fff; }
-    .ghost { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .field { display: flex; flex-direction: column; gap: 6px; }
-    .field label { font-size: 0.86rem; color: #94a3b8; }
-    .field input { background: #020617; color: #e2e8f0; border: 1px solid #334155; border-radius: 10px; padding: 10px 12px; font-size: 0.95rem; }
-    .hint { margin-top: 14px; padding: 14px; border-radius: 12px; background: linear-gradient(135deg, rgba(37,99,235,0.18), rgba(14,165,233,0.10)); border: 1px solid rgba(56,189,248,0.28); line-height: 1.8; }
-    .hint strong { color: #e0f2fe; }
-    .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
-    .metric { background: #020617; border: 1px solid #1e293b; border-radius: 12px; padding: 12px; }
-    .metric .label { color: #94a3b8; font-size: 0.8rem; margin-bottom: 4px; }
-    .metric .value { font-size: 1.05rem; font-weight: 700; word-break: break-word; }
-    .metric.good .value { color: #4ade80; }
-    .metric.bad .value { color: #f87171; }
-    .metric.mid .value { color: #facc15; }
-    pre { margin-top: 14px; background: #020617; border: 1px solid #1e293b; border-radius: 12px; padding: 14px; font-size: 0.8rem; line-height: 1.55; overflow: auto; white-space: pre-wrap; word-break: break-word; }
-    .logs { margin-top: 14px; background: #020617; border: 1px solid #1e293b; border-radius: 12px; padding: 14px; font-size: 0.8rem; line-height: 1.55; overflow: auto; white-space: pre-wrap; word-break: break-word; height: 240px; }
-    .logs div { margin-bottom: 8px; color: #cbd5e1; }
-    .logs .ok { color: #86efac; }
-    .logs .err { color: #fca5a5; }
-    .logs .info { color: #7dd3fc; }
-    .logs .warn { color: #fde68a; }
-    .tag-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-    .tag { padding: 6px 10px; border-radius: 999px; background: #172033; color: #cbd5e1; font-size: 0.8rem; border: 1px solid #334155; }
-    .raw-title { margin-top: 14px; color: #94a3b8; font-size: 0.88rem; }
-    @media (max-width: 900px) {
-      .layout { grid-template-columns: 1fr; }
-      .grid, .summary { grid-template-columns: 1fr; }
-    }
-  </style>
+  <title>动作识别调试 · 心语陪伴</title>
+    <link rel="stylesheet" href="/static/vendor/fontawesome/css/all.min.css">
+    <meta name="theme-color" content="#edf5ef">
+    <link rel="stylesheet" href="/static/companion_ui.css?v=20260914-unified-1">
+    <script src="/static/companion_ui.js?v=20260914-unified-1" defer></script>
 </head>
-<body>
+<body class="companion-page diagnostics-page action-page">
+<a class="ui-skip-link" href="#diagnostics-main">跳到调试内容</a>
   <div class="page">
-    <h1>🧾 MMSE 三步动作测试 Demo</h1>
+    <header class="page-header"><div><h1>动作识别调试</h1><p class="subtitle">心语陪伴 · 开发调试工具</p></div><a class="btn" href="/">返回陪伴</a></header>
     <div class="subtitle">
-      这个页面专门用于独立测试 `language_3step_action`，不需要进入完整问诊流程。<br>
+      这个页面专门用于独立测试 <code>language_3step_action</code>，不会启动陪伴会话。<br>
       点击开始后按提示完成：举手、握拳、张开五指。
     </div>
 
-    <div class="layout">
+    <main class="layout" id="diagnostics-main" tabindex="-1">
       <div class="panel">
         <h2>实时预览与录制</h2>
         <video id="preview" autoplay playsinline muted></video>
-        <div id="cameraStatus" class="status">等待打开摄像头</div>
+        <div id="cameraStatus" role="status" aria-live="polite" aria-atomic="true" class="status">等待打开摄像头</div>
 
-        <div class="grid" style="margin-top:14px;">
+        <div class="grid field-grid">
           <div class="field">
             <label for="durationMs">录制时长（毫秒）</label>
             <input id="durationMs" type="number" min="3000" max="30000" step="1000" value="15000">
@@ -89,10 +44,10 @@
         </div>
 
         <div class="controls">
-          <button id="openBtn" class="primary">打开摄像头</button>
-          <button id="closeBtn" class="ghost">关闭摄像头</button>
-          <button id="startBtn" class="success">开始三步动作测试</button>
-          <button id="clearBtn" class="danger">清空结果</button>
+          <button id="openBtn" class="btn btn-primary">打开摄像头</button>
+          <button id="closeBtn" class="btn">关闭摄像头</button>
+          <button id="startBtn" class="btn btn-primary">开始三步动作测试</button>
+          <button id="clearBtn" class="btn">清空结果</button>
         </div>
 
         <div class="tag-row">
@@ -131,19 +86,19 @@
           </div>
         </div>
 
-        <div id="detailStatus" class="status" style="margin-top:14px;">还没有评估结果</div>
+        <div id="detailStatus" role="status" aria-live="polite" aria-atomic="true" class="status">还没有评估结果</div>
 
         <div class="raw-title">原始 JSON</div>
-        <pre id="rawJson">{
+        <pre id="rawJson" tabindex="0" aria-label="原始评估 JSON">{
   "message": "点击开始进行测试"
 }</pre>
       </div>
 
-      <div class="panel" style="grid-column: 1 / -1;">
+      <div class="panel full-width">
         <h2>日志</h2>
-        <div id="logs" class="logs"></div>
+        <div id="logs" class="logs" role="log" aria-label="调试日志" tabindex="0"></div>
       </div>
-    </div>
+    </main>
   </div>
 
   <script>

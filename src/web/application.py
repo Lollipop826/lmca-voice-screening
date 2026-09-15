@@ -6,6 +6,7 @@ import io
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 import zipfile
@@ -31,6 +32,7 @@ from src.db import database
 from src.voice.media import resample_audio
 
 from .auth import AuthService
+from .page_responses import message_page
 
 
 def _cognitive_screening_enabled(environ=os.environ) -> bool:
@@ -178,6 +180,7 @@ class ApplicationHttpController:
         static_dir: Path,
         voice_calls_dir: Path,
         get_agent: Callable[[], Any],
+        memory_service: Any = None,
         repository=database,
         environ=None,
         logger=print,
@@ -187,6 +190,7 @@ class ApplicationHttpController:
         self.static_dir = Path(static_dir)
         self.voice_calls_dir = Path(voice_calls_dir).resolve()
         self._get_agent = get_agent
+        self.memory_service = memory_service
         self.repository = repository
         self.environ = environ if environ is not None else os.environ
         self._log = logger
@@ -313,6 +317,94 @@ class ApplicationHttpController:
             return {"success": True, **detail}
         except Exception as exc:
             return self._error(str(exc), 500)
+
+    async def delete_session(
+        self,
+        request: Request,
+        session_id: str,
+    ):
+        self.auth.require_admin_user(request)
+        try:
+            session_id = str(session_id or "").strip()
+            detail = self.repository.get_session_detail(session_id)
+            if not detail:
+                return self._error("会话不存在", 404)
+            patient_id = str((detail.get("session") or {}).get("patient_id") or "").strip()
+            memory_cleanup = None
+            agent = self._get_agent()
+            memory_service = self.memory_service or getattr(agent, "patient_memory_service", None)
+            memory = getattr(memory_service, "_long_term_memory", None)
+            if memory is None:
+                memory = memory_service if callable(getattr(memory_service, "delete_session_data", None)) else None
+            if patient_id and memory is not None:
+                cleanup = getattr(memory, "delete_session_data", None)
+                if callable(cleanup):
+                    memory_cleanup = cleanup(session_id)
+            result = self.repository.delete_session(session_id)
+            if not result:
+                return self._error("会话不存在", 404)
+
+            file_cleanup = self._cleanup_session_files(session_id)
+            cleanup_error = file_cleanup.get("error")
+            if cleanup_error:
+                self._log(
+                    f"[SessionDelete] ⚠️ 会话 {session_id} 数据已删，"
+                    f"文件清理失败: {cleanup_error}"
+                )
+
+            response = {
+                "success": True,
+                "session_id": str(session_id),
+                "deleted_counts": result.get("deleted_counts", {}),
+                "memory_cleanup": memory_cleanup,
+                "file_cleanup": "partial" if cleanup_error else "done",
+                "file_cleanup_counts": file_cleanup.get("removed", {}),
+            }
+            if cleanup_error:
+                response["file_cleanup_error"] = cleanup_error
+            self._log(f"[SessionDelete] ✅ 已删除会话 {session_id}")
+            return response
+        except ValueError as exc:
+            if str(exc) == "SESSION_ACTIVE":
+                return self._error("会话进行中，结束后才能删除", 409)
+            return self._error(str(exc), 400)
+        except Exception as exc:
+            return self._error(str(exc), 500)
+
+    def _cleanup_session_files(self, session_id: str) -> dict[str, Any]:
+        """删除会话目录及旧版 session sidecar，始终限制在 data 根目录内。"""
+        session_id = str(session_id or "").strip()
+        if not session_id or Path(session_id).name != session_id or session_id in {".", ".."}:
+            raise ValueError("会话标识无效")
+
+        data_dir = self.voice_calls_dir.parent
+        targets = {
+            "voice_calls": self.voice_calls_dir / session_id,
+            "conversations": data_dir / "conversations" / f"{session_id}.json",
+            "mmse_scores": data_dir / "mmse_scores" / f"{session_id}_mmse.json",
+            "cognitive_performance": data_dir / "cognitive_performance" / f"{session_id}_performance.json",
+        }
+        removed: dict[str, int] = {}
+        errors: list[str] = []
+        for kind, target in targets.items():
+            try:
+                resolved = target.resolve()
+                root = self.voice_calls_dir if kind == "voice_calls" else data_dir
+                resolved.relative_to(root)
+                if target.is_symlink():
+                    raise ValueError(f"拒绝删除符号链接: {target}")
+                if target.is_dir():
+                    shutil.rmtree(target)
+                    removed[kind] = 1
+                elif target.is_file():
+                    target.unlink()
+                    removed[kind] = 1
+            except Exception as exc:
+                errors.append(f"{kind}: {exc}")
+        return {
+            "removed": removed,
+            "error": "; ".join(errors) if errors else None,
+        }
 
     async def get_session_audio(
         self,
@@ -597,24 +689,37 @@ class ApplicationHttpController:
             get_active_ark_model,
         )
 
+        if self.environ.get("DASHSCOPE_API_KEY"):
+            model = self.environ.get("DASHSCOPE_CHAT_MODEL", "qwen3.7-flash")
+            return {"model": model, "options": [model], "provider": "dashscope"}
+        if not self.environ.get("ARK_API_KEY"):
+            model = self.environ.get(
+                "TOPIC_SELECTION_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507"
+            )
+            return {"model": model, "options": [model], "provider": "siliconflow"}
         return {
             "model": get_active_ark_model(),
             "options": _ARK_MODEL_OPTIONS,
+            "provider": "volcengine",
         }
 
     async def switch_model(self, request: Request):
-        from src.llm.http_client_pool import (
-            _ARK_MODEL_OPTIONS,
-            switch_ark_model,
-        )
+        from src.llm.http_client_pool import switch_ark_model
 
         try:
             body = await request.json()
-            result = switch_ark_model(body.get("model", ""))
+            current = await self.get_model()
+            requested = body.get("model", "")
+            if current["provider"] == "volcengine":
+                result = switch_ark_model(requested)
+            elif requested == current["model"]:
+                result = requested
+            else:
+                raise ValueError(f"当前对话使用 {current['model']}，暂不支持切换到该模型")
             return {
+                **current,
                 "success": True,
                 "model": result,
-                "options": _ARK_MODEL_OPTIONS,
             }
         except ValueError as exc:
             return self._error(str(exc), 400)
@@ -932,8 +1037,9 @@ class ApplicationHttpController:
                 content=html_file.read_text(encoding="utf-8"),
                 headers=self._NO_CACHE_HEADERS,
             )
-        return HTMLResponse(
-            f"<h1>{missing_message}</h1>",
+        return message_page(
+            missing_message,
+            "页面暂时无法打开。请返回陪伴首页；如果仍无法访问，请联系管理员。",
             status_code=404,
         )
 
@@ -958,6 +1064,11 @@ class ApplicationHttpController:
                 "/api/sessions/{session_id}",
                 self.get_session,
                 ["GET"],
+            ),
+            (
+                "/api/sessions/{session_id}",
+                self.delete_session,
+                ["DELETE"],
             ),
             (
                 "/api/sessions/{session_id}/audio/{audio_id}",

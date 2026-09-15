@@ -57,10 +57,30 @@ class VoiceRuntimeUtilityTests(unittest.TestCase):
 
         self.assertIsNone(buffer.add_chunk(chunk))
         self.assertTrue(buffer.is_speaking)
-        self.assertEqual(buffer.has_speech(chunk), 0.75)
+        self.assertEqual(buffer.has_speech(chunk), 0.9)
+        self.assertEqual(buffer.has_speech(chunk), 0.9)
 
         buffer.reset()
         self.assertEqual(model.reset_count, 1)
+        self.assertEqual(buffer.has_speech(chunk), 0.0)
+
+    def test_interrupt_scores_follow_continuous_vad_without_extra_inference(self):
+        model = _FakeVADModel([0.2, 0.8, 0.95, 0.1])
+        buffer = VADBuffer(vad_model=model, environ={}, logger=lambda _: None)
+        for probability in (0.2, 0.8, 0.95, 0.1):
+            chunk = np.full(512, 0.1, dtype=np.float32)
+            buffer.add_chunk(chunk)
+            self.assertEqual(buffer.has_speech(chunk), probability)
+            self.assertEqual(buffer.has_speech(chunk), probability)
+        self.assertEqual(model.reset_count, 0)
+
+    def test_batched_audio_does_not_count_one_voiced_frame_as_sustained_speech(self):
+        model = _FakeVADModel([0.95, 0.05, 0.05, 0.05])
+        buffer = VADBuffer(vad_model=model, environ={}, logger=lambda _: None)
+        chunk = np.full(2048, 0.1, dtype=np.float32)
+        buffer.add_chunk(chunk)
+        self.assertEqual(buffer.has_speech(chunk), 0.05)
+        self.assertEqual(buffer.has_speech(chunk.copy()), 0.0)
 
     def test_vad_allows_a_1_2_second_pause_before_finishing(self):
         speech = np.ones(512, dtype=np.float32) * 0.1

@@ -5,10 +5,17 @@ Audio-based emotion recognition using Emotion2Vec+
 from __future__ import annotations
 
 import os
+import tempfile
 import threading
+import time
 from typing import Any, Dict, Optional
 
 import numpy as np
+
+# 推理失败会丢弃模型实例，但不能永久禁用音频情绪识别。等待这段退避后
+# 允许重新加载，既能从瞬时故障（坏音频、显存抖动）恢复，又不会在每次
+# 调用上重复付出加载大模型的代价。
+MODEL_RELOAD_BACKOFF_S = 60.0
 
 # Emotion2Vec+ 的标签在不同版本/语言配置下可能是英文或中文。
 EMOTION2VEC_TO_7D = {
@@ -73,17 +80,39 @@ class AudioEmotionClassifier:
         self._model_attempted = model is not None or not use_modelscope
         self._last_error: str | None = None
         self._model_lock = threading.Lock()
+        self._reload_blocked_until = 0.0
 
         print(f"[AudioEmotionClassifier] 配置: model={model_name}, device={device}")
 
+    def _discard_model(self, reason: str) -> None:
+        """Drop the model after a failure but allow a later reload attempt.
+
+        Clearing ``_model_attempted`` is what makes recovery possible: a single
+        bad utterance used to disable audio emotion recognition for the entire
+        process lifetime, which silently downgraded every later turn to the
+        text-only fallback.
+        """
+        with self._model_lock:
+            self._model = None
+            self._model_attempted = False
+            self._reload_blocked_until = time.monotonic() + MODEL_RELOAD_BACKOFF_S
+        print(
+            f"[AudioEmotionClassifier] 丢弃模型实例（{reason}），"
+            f"{MODEL_RELOAD_BACKOFF_S:.0f}s 后允许重新加载"
+        )
+
     def _load_model(self) -> Any:
-        """延迟加载模型（首次调用时加载）"""
+        """延迟加载模型（首次调用时加载，失败后按退避重试）"""
         if self._model_attempted:
             return self._model
+        if time.monotonic() < self._reload_blocked_until:
+            return None
 
         with self._model_lock:
             if self._model_attempted:
                 return self._model
+            if time.monotonic() < self._reload_blocked_until:
+                return None
 
             self._model_attempted = True
 
@@ -127,7 +156,24 @@ class AudioEmotionClassifier:
         return self._model_attempted
 
     def prewarm(self) -> bool:
-        return self._load_model() is not None
+        if self._load_model() is None:
+            return False
+        # The first librosa/Numba call can otherwise hold up the first reply
+        # even after the neural model reports ready. Warm the actual prosody
+        # path on generated audio before admitting voice sessions.
+        import soundfile as sf
+
+        sample_rate = 16000
+        seconds = np.arange(2 * sample_rate, dtype=np.float32) / sample_rate
+        samples = (
+            0.05 * np.sin(2 * np.pi * 220 * seconds)
+            * (0.5 + 0.5 * np.sin(2 * np.pi * 3 * seconds))
+        )
+        with tempfile.TemporaryDirectory(prefix="emotion-prewarm-") as directory:
+            path = os.path.join(directory, "warmup.wav")
+            sf.write(path, samples, sample_rate)
+            self.get_prosody_features(path)
+        return True
 
     def classify_audio(
         self,
@@ -173,9 +219,8 @@ class AudioEmotionClassifier:
             labels, scores = self._extract_scores(result)
             if not labels or not scores:
                 self._last_error = "无法解析 Emotion2Vec 输出"
-                with self._model_lock:
-                    self._model = None
                 print(f"[AudioEmotionClassifier] ⚠️ 无法解析模型输出: result_type={type(result).__name__}")
+                self._discard_model("输出无法解析")
                 return self._neutral_emotions()
 
             # 映射到7维情绪
@@ -184,10 +229,9 @@ class AudioEmotionClassifier:
             return emotion_7d
 
         except Exception as e:
-            self._last_error = type(e).__name__
+            self._last_error = f"{type(e).__name__}: {e}"
             print(f"[AudioEmotionClassifier] ❌ 推理失败: {self._last_error}")
-            with self._model_lock:
-                self._model = None
+            self._discard_model("推理异常")
             return self._neutral_emotions()
 
     def classify_samples(
@@ -220,14 +264,12 @@ class AudioEmotionClassifier:
             if labels and scores:
                 return self._map_to_7d(labels, scores)
             self._last_error = "无法解析 Emotion2Vec 实时输出"
-            with self._model_lock:
-                self._model = None
+            self._discard_model("实时输出无法解析")
             return self._neutral_emotions()
         except Exception as exc:
             self._last_error = f"{type(exc).__name__}: {exc}"
             print(f"[AudioEmotionClassifier] 实时窗口推理失败: {exc}")
-            with self._model_lock:
-                self._model = None
+            self._discard_model("实时窗口推理异常")
             return self._neutral_emotions()
 
     @staticmethod

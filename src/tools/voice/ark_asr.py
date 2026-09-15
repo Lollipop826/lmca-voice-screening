@@ -25,6 +25,8 @@ import numpy as np
 import websockets
 from websockets.exceptions import WebSocketException
 
+from .ws_proxy import websocket_proxy_kwargs
+
 _ARK_ASR_MODE_ALIASES = {
     "stream": "bigmodel",
     "bigmodel": "bigmodel",
@@ -239,10 +241,31 @@ class ArkASRStreamingSession:
         self._finished = False
         self._text = ""
         self._next_sequence = 1
+        # 流式路径此前没有任何耗时埋点，只有整段识别的 ark_asr_recognize 会打
+        # [ArkASR][Timing]。缺了这些锚点就无法回答"握手是否真被用户说话盖住"，
+        # 也无法把代理/网络开销与服务端推理时间分开。
+        self._timing = {
+            "connect_started_at": None,
+            "connected_at": None,
+            "config_sent_at": None,
+            "first_audio_sent_at": None,
+            "first_packet_at": None,
+            "first_text_at": None,
+            "last_audio_sent_at": None,
+            "final_packet_at": None,
+            "audio_seconds": 0.0,
+            "chunk_count": 0,
+            "logid": "",
+        }
 
     @property
     def text(self) -> str:
         return self._text
+
+    @property
+    def timing(self) -> dict:
+        """Monotonic anchors for one stream, in seconds from ``time.perf_counter``."""
+        return dict(self._timing)
 
     async def start(self) -> None:
         if self._ws is not None:
@@ -252,6 +275,7 @@ class ArkASRStreamingSession:
                 "实时识别要求 ARK_ASR_MODE=bigmodel 或 bigmodel_async"
             )
 
+        self._timing["connect_started_at"] = time.perf_counter()
         self._ws = await self._ws_connect(
             _WSS_URL,
             additional_headers=_asr_headers(),
@@ -260,6 +284,12 @@ class ArkASRStreamingSession:
             ping_interval=20,
             ping_timeout=20,
             max_size=8 * 1024 * 1024,
+            **websocket_proxy_kwargs(),
+        )
+        self._timing["connected_at"] = time.perf_counter()
+        self._timing["logid"] = _header_get(
+            _extract_response_headers(self._ws),
+            "X-Tt-Logid",
         )
         config = {
             "user": {"uid": "mmse_screening"},
@@ -282,6 +312,7 @@ class ArkASRStreamingSession:
                 sequence=self._next_sequence,
             )
         )
+        self._timing["config_sent_at"] = time.perf_counter()
         self._next_sequence += 1
         self._receiver = asyncio.create_task(self._receive())
 
@@ -299,6 +330,14 @@ class ArkASRStreamingSession:
                 )
             )
             self._next_sequence += 1
+            sent_at = time.perf_counter()
+            if self._timing["first_audio_sent_at"] is None:
+                self._timing["first_audio_sent_at"] = sent_at
+            self._timing["last_audio_sent_at"] = sent_at
+            self._timing["chunk_count"] += 1
+            self._timing["audio_seconds"] += samples.size / float(
+                self.sample_rate
+            )
 
     async def finish(self) -> str:
         if self._finished:
@@ -318,7 +357,50 @@ class ArkASRStreamingSession:
                 await asyncio.wait_for(self._receiver, _RECV_TIMEOUT)
             return self._text
         finally:
+            self._log_timing_summary()
             await self.aclose()
+
+    def _log_timing_summary(self) -> None:
+        """Report the anchors that separate transport cost from server inference.
+
+        ``connect`` and ``first_text_after_last_audio`` are the two numbers that
+        matter for a proxied deployment: the former moves with the network path,
+        the latter is dominated by server-side inference and stays put.
+        """
+        timing = self._timing
+        connect_ms = _elapsed_ms(
+            timing["connect_started_at"],
+            timing["connected_at"],
+        )
+        first_packet_ms = _elapsed_ms(
+            timing["connected_at"],
+            timing["first_packet_at"],
+        )
+        first_text_ms = _elapsed_ms(
+            timing["first_audio_sent_at"],
+            timing["first_text_at"],
+        )
+        tail_ms = _elapsed_ms(
+            timing["last_audio_sent_at"],
+            timing["final_packet_at"],
+        )
+        total_ms = _elapsed_ms(
+            timing["connect_started_at"],
+            timing["final_packet_at"],
+        )
+        print(
+            "[ArkASR][StreamTiming] "
+            f"mode={_ARK_ASR_MODE} | resource={_RESOURCE_ID} | "
+            f"audio={timing['audio_seconds']:.2f}s | "
+            f"chunks={timing['chunk_count']} | "
+            f"connect={_fmt_ms(connect_ms)} | "
+            f"first_packet={_fmt_ms(first_packet_ms)} | "
+            f"first_text_after_first_audio={_fmt_ms(first_text_ms)} | "
+            f"tail_after_last_audio={_fmt_ms(tail_ms)} | "
+            f"total={_fmt_ms(total_ms)}"
+            + (f" | logid={timing['logid']}" if timing["logid"] else "")
+            + f" | text_chars={len(self._text.strip())}"
+        )
 
     async def aclose(self) -> None:
         receiver, self._receiver = self._receiver, None
@@ -335,17 +417,23 @@ class ArkASRStreamingSession:
     async def _receive(self) -> None:
         while True:
             data = await asyncio.wait_for(self._ws.recv(), _RECV_TIMEOUT)
+            received_at = time.perf_counter()
+            if self._timing["first_packet_at"] is None:
+                self._timing["first_packet_at"] = received_at
             response = _parse_server_response(data)
             if response["error"]:
                 raise ArkASRError("[ArkASR] 服务端识别失败")
             text = _extract_text_from_payload(response["payload"])
             if text:
+                if self._timing["first_text_at"] is None:
+                    self._timing["first_text_at"] = received_at
                 self._text = text
                 if self._on_result is not None:
                     result = self._on_result(text, response["is_last"])
                     if inspect.isawaitable(result):
                         await result
             if response["is_last"]:
+                self._timing["final_packet_at"] = received_at
                 return
 
 
@@ -428,6 +516,7 @@ async def _open_warm_socket():
         ping_interval=20,
         ping_timeout=20,
         max_size=8 * 1024 * 1024,
+        **websocket_proxy_kwargs(),
     )
     return _ArkASRWarmSocket(ws)
 
@@ -642,6 +731,7 @@ async def ark_asr_recognize(
                 ping_interval=20,
                 ping_timeout=20,
                 max_size=8 * 1024 * 1024,
+                **websocket_proxy_kwargs(),
             ) as ws:
                 attempt_metrics["connected_at"] = time.perf_counter()
                 text, has_unparsed_payload = await _exchange_over_ws(

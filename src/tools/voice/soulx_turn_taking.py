@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -18,6 +19,16 @@ from typing import Any
 
 import numpy as np
 import websockets
+
+
+# 背压告警的容忍系数：预算 = 本次音频时长 × 该系数。
+# 取 1.0 意味着要求 SoulX 严格快于实时，但实测单次推理稳定在音频时长的
+# 1.1~1.3 倍，短暂超出并不会让队列单调积压，按 1.0 报警会把常态当异常。
+# 该系数只影响告警何时打印，不改变任何处理行为。
+_BACKPRESSURE_TOLERANCE = max(
+    1.0,
+    float(os.getenv("SOULX_BACKPRESSURE_TOLERANCE", "1.5")),
+)
 
 
 class SoulXUnavailable(RuntimeError):
@@ -36,8 +47,8 @@ class SoulXTurnState:
     wait_idle_count: int = 0
     max_wait_count: int = 0
     monitoring_wait_silence: bool = False
-    speech_detected: bool = False
-    chunk_rms: float = 0.0
+    speech_detected: bool | None = None
+    chunk_rms: float | None = None
     raw: dict[str, Any] | None = None
 
     @classmethod
@@ -64,8 +75,16 @@ class SoulXTurnState:
             monitoring_wait_silence=bool(
                 state_payload.get("monitoring_wait_silence", False)
             ),
-            speech_detected=bool(state_payload.get("speech_detected", False)),
-            chunk_rms=float(state_payload.get("chunk_rms") or 0.0),
+            speech_detected=(
+                state_payload["speech_detected"]
+                if isinstance(state_payload.get("speech_detected"), bool)
+                else None
+            ),
+            chunk_rms=(
+                float(state_payload["chunk_rms"])
+                if state_payload.get("chunk_rms") is not None
+                else None
+            ),
             raw=payload,
         )
 
@@ -154,10 +173,11 @@ class SoulXTurnTakingClient:
             ensure_ascii=False,
         )
 
-        # 背压探针：实时预算 = 本次请求携带的音频时长（16 样本/ms@16k）。
-        # 主循环串行消费，"抢锁等待 + 往返"一旦超过预算，队列就会单调积压、
-        # 实时预测越来越滞后。仅在超阈值时打一行，避免刷屏。
-        _budget_ms = max(64.0, audio.size / 16.0)
+        # 背压探针：实时预算 = 本次请求携带的音频时长（16 样本/ms@16k）
+        # 乘以容忍系数。主循环串行消费，"抢锁等待 + 往返"一旦持续超过预算，
+        # 队列就会单调积压、实时预测越来越滞后。仅在超阈值时打一行，避免刷屏。
+        _audio_ms = max(64.0, audio.size / 16.0)
+        _budget_ms = _audio_ms * _BACKPRESSURE_TOLERANCE
         _lock_wait_start = time.perf_counter()
         async with self._lock:
             _lock_wait_ms = (time.perf_counter() - _lock_wait_start) * 1000.0

@@ -103,6 +103,7 @@ class SpeechProcessingCoordinator:
         stop_playback: Callable[[], Any],
         disconnect_error_type: type[Exception],
         client_id: str,
+        cancel_render_jobs: Callable[..., Any] | None = None,
         logger=print,
     ) -> None:
         self.session = session
@@ -112,6 +113,7 @@ class SpeechProcessingCoordinator:
         self._stop_playback = stop_playback
         self._disconnect_error_type = disconnect_error_type
         self.client_id = client_id
+        self._cancel_render_jobs = cancel_render_jobs
         self._log = logger
 
     def queue_pending(
@@ -139,15 +141,33 @@ class SpeechProcessingCoordinator:
             .copy()
         )
 
-    async def interrupt_active(self, reason: str) -> None:
+    async def interrupt_active(
+        self,
+        reason: str,
+        *,
+        force_playback: bool = False,
+    ) -> None:
         processing = self.session.processing
         runtime = self.session.runtime
         if not processing.is_active:
+            # Generation may finish while interruption ASR is still awaited.
+            # Buffered client audio outlives the generation task.
+            if force_playback or self._is_ai_speaking():
+                result = self._stop_playback()
+                if hasattr(result, "__await__"):
+                    await result
             return
+        active_task = processing.task
+        if self._cancel_render_jobs is not None:
+            self._cancel_render_jobs(
+                session=self.session,
+                generation=processing.generation,
+                turn_id=processing.active_turn_id,
+            )
         runtime.stop_generate = True
         processing.generation += 1
         processing.revision_enabled = False
-        if self._is_ai_speaking():
+        if force_playback or self._is_ai_speaking():
             self._log(
                 f"[全双工] 🛑 {reason}，停止当前AI播放与处理"
             )
@@ -159,6 +179,15 @@ class SpeechProcessingCoordinator:
                 f"[全双工] 🛑 {reason}，"
                 "当前处理结果作废，等待用户补充后的最新版"
             )
+        current_task = asyncio.current_task()
+        if (
+            active_task is not None
+            and active_task is not current_task
+            and not active_task.done()
+        ):
+            self._log("[全双工] ⏹️ 取消当前生成任务")
+            active_task.cancel()
+            await asyncio.gather(active_task, return_exceptions=True)
 
     async def cancel_active(self, reason: str) -> None:
         """Cancel work before sealing a session so an old turn cannot cross-write."""
@@ -168,6 +197,8 @@ class SpeechProcessingCoordinator:
         processing.pending_extra_meta = None
         processing.revision_enabled = False
         self.session.runtime.stop_generate = True
+        if self._cancel_render_jobs is not None:
+            self._cancel_render_jobs(session=self.session)
         task = processing.task
         if task is not None and not task.done():
             self._log(f"[TURN] ⏹️ {reason}，取消当前语音处理")
@@ -506,58 +537,67 @@ class VoiceTTSStreamer:
                     runtime.realtime_comfort_playing = False
                     return self._empty_result(interrupted=True, reason="cancelled")
                 started = True
-            async for audio_chunk in self.tts.text_to_speech_streaming(
+            tts_stream = self.tts.text_to_speech_streaming(
                 clean_text,
                 emotion=emotion,
-            ):
-                if lease is not None and self._arbiter.cancelled(lease):
-                    self._log(f"[TTS{label}] ⚠️ 被更高优先级输出抢占")
-                    interrupted = True
-                    interruption_reason = "preempted"
-                    break
-                if allow_interrupt and runtime.stop_generate:
-                    self._log(
-                        f"[TTS{label}] ⚠️ 流式生成中检测到打断，停止"
+            )
+            try:
+                async for audio_chunk in tts_stream:
+                    if lease is not None and self._arbiter.cancelled(lease):
+                        self._log(f"[TTS{label}] ⚠️ 被更高优先级输出抢占")
+                        interrupted = True
+                        interruption_reason = "preempted"
+                        break
+                    if allow_interrupt and runtime.stop_generate:
+                        self._log(
+                            f"[TTS{label}] ⚠️ 流式生成中检测到打断，停止"
+                        )
+                        interrupted = True
+                        interruption_reason = "cancelled"
+                        break
+                    chunk_array = (
+                        np.asarray(audio_chunk, dtype=np.float32)
+                        .reshape(-1)
                     )
-                    interrupted = True
-                    interruption_reason = "cancelled"
-                    break
-                chunk_array = (
-                    np.asarray(audio_chunk, dtype=np.float32)
-                    .reshape(-1)
-                )
-                if chunk_array.size == 0:
-                    continue
-                collected_chunks.append(chunk_array.copy())
-                payload = {
-                    "type": event_type,
-                    "sample_rate": self.sample_rate,
-                    **output_identity,
-                }
-                chunk_base64 = base64.b64encode(
-                    chunk_array.tobytes()
-                ).decode("utf-8")
-                if event_type == "tts_audio":
-                    payload["audio"] = chunk_base64
-                    payload["format"] = "pcm"
-                else:
-                    payload["chunk"] = chunk_base64
-                    if include_dtype:
-                        payload["dtype"] = "float32"
-                if not await self.connection.send_json(payload):
-                    interrupted = True
-                    interruption_reason = "cancelled"
-                    break
-                await asyncio.sleep(0)
-                chunk_count += 1
-                total_samples += len(chunk_array)
-                if first_chunk:
-                    first_latency = self._now() - started_at
-                    self._log(
-                        f"[TTS{label}] 🎵 首块! "
-                        f"延迟={first_latency:.2f}s"
-                    )
-                    first_chunk = False
+                    if chunk_array.size == 0:
+                        continue
+                    collected_chunks.append(chunk_array.copy())
+                    payload = {
+                        "type": event_type,
+                        "sample_rate": self.sample_rate,
+                        **output_identity,
+                    }
+                    chunk_base64 = base64.b64encode(
+                        chunk_array.tobytes()
+                    ).decode("utf-8")
+                    if event_type == "tts_audio":
+                        payload["audio"] = chunk_base64
+                        payload["format"] = "pcm"
+                    else:
+                        payload["chunk"] = chunk_base64
+                        if include_dtype:
+                            payload["dtype"] = "float32"
+                    if not await self.connection.send_json(payload):
+                        interrupted = True
+                        interruption_reason = "cancelled"
+                        break
+                    await asyncio.sleep(0)
+                    chunk_count += 1
+                    total_samples += len(chunk_array)
+                    if first_chunk:
+                        first_latency = self._now() - started_at
+                        self._log(
+                            f"[TTS{label}] 🎵 首块! "
+                            f"延迟={first_latency:.2f}s"
+                        )
+                        first_chunk = False
+            finally:
+                # 打断时上面直接 break，生成器停在 yield 处不再推进，其清理
+                # 逻辑要等 GC 回收才触发。显式 aclose 让提供方立刻收尾（火山
+                # TTS 借此排空残留帧保住连接），避免下一句被迫重连。
+                close_stream = getattr(tts_stream, "aclose", None)
+                if callable(close_stream):
+                    await close_stream()
         except asyncio.CancelledError:
             if not cancel_as_result:
                 raise
@@ -1021,6 +1061,7 @@ class VoiceConnectionCleanup:
         patient_memory_service=None,
         end_session: Callable[..., Any] | None = None,
         realtime_companion=None,
+        cancel_render_jobs: Callable[..., Any] | None = None,
         logger=print,
     ) -> None:
         self.session = session
@@ -1029,6 +1070,7 @@ class VoiceConnectionCleanup:
         self.patient_memory_service = patient_memory_service
         self._end_session = end_session
         self._realtime_companion = realtime_companion
+        self._cancel_render_jobs = cancel_render_jobs
         self._log = logger
 
     async def close(self, client_id: str) -> None:
@@ -1037,6 +1079,8 @@ class VoiceConnectionCleanup:
         lifecycle = self.session.lifecycle
 
         runtime.stop_generate = True
+        if self._cancel_render_jobs is not None:
+            self._cancel_render_jobs(session=self.session)
         processing.pending_audio = None
         processing.pending_source = ""
         processing.pending_extra_meta = None
@@ -1129,6 +1173,12 @@ class PatientMemoryService:
     @staticmethod
     def _enabled(session: VoiceSession) -> bool:
         return bool(getattr(session, "long_term_memory_enabled", True))
+
+    def _writes_enabled(self, session: VoiceSession) -> bool:
+        return bool(
+            self._long_term_memory_writes
+            and getattr(session, "long_term_memory_writes_enabled", True)
+        )
 
     def resolve_for_session(
         self,
@@ -1247,7 +1297,7 @@ class PatientMemoryService:
         if (
             not patient_id
             or self._long_term_memory is None
-            or not self._long_term_memory_writes
+            or not self._writes_enabled(session)
             or not self._enabled(session)
         ):
             return False
@@ -1286,7 +1336,7 @@ class PatientMemoryService:
         if (
             not patient_id
             or not callable(updater)
-            or not self._long_term_memory_writes
+            or not self._writes_enabled(session)
             or not self._enabled(session)
         ):
             return False
@@ -1322,7 +1372,7 @@ class PatientMemoryService:
         if (
             not patient_id
             or not callable(updater)
-            or not self._long_term_memory_writes
+            or not self._writes_enabled(session)
             or not self._enabled(session)
         ):
             return False
@@ -1433,7 +1483,7 @@ class PatientMemoryService:
         if (
             not patient_id
             or self._long_term_memory is None
-            or not self._long_term_memory_writes
+            or not self._writes_enabled(session)
             or not self._enabled(session)
         ):
             return False
@@ -1464,16 +1514,22 @@ class PatientMemoryService:
         if (
             not patient_id
             or self._long_term_memory is None
-            or not self._long_term_memory_writes
+            or not self._writes_enabled(session)
             or not self._enabled(session)
         ):
             return False
         try:
-            self._long_term_memory.update_mmse_score(
-                patient_id,
-                score,
-                weak_dimensions or [],
-            )
+            session_id = str(session.session_id or "").strip()
+            updater = self._long_term_memory.update_mmse_score
+            if session_id:
+                import inspect
+                parameters = inspect.signature(updater).parameters
+                if "session_id" in parameters:
+                    updater(patient_id, score, weak_dimensions or [], session_id=session_id)
+                else:
+                    updater(patient_id, score, weak_dimensions or [])
+            else:
+                updater(patient_id, score, weak_dimensions or [])
             return True
         except Exception as exc:
             self._log(f"[EmotionMemory] ⚠️ MMSE同步失败: {type(exc).__name__}")
@@ -1486,7 +1542,7 @@ class PatientMemoryService:
         total_mmse_score: Any = None,
         cognitive_status: Any = None,
     ) -> bool:
-        """Schedule non-blocking consolidation for the current patient session."""
+        """Schedule one non-blocking Qwen reflection for the current patient session."""
         patient_id = str(session.lifecycle.current_patient_id or "").strip()
         session_id = str(session.session_id or "").strip()
         if not patient_id or not session_id:
@@ -1494,44 +1550,46 @@ class PatientMemoryService:
 
         if (
             self._long_term_memory is None
-            or not self._long_term_memory_writes
+            or not self._writes_enabled(session)
             or not self._enabled(session)
         ):
             self._log("[EmotionMemory] ⚠️ 新记忆服务未配置，跳过整理")
             return False
 
-        consolidator = getattr(self._long_term_memory, "consolidate_pending_turns", None)
-        if not callable(consolidator):
-            self._log("[EmotionMemory] ⚠️ 新记忆整理接口不可用")
-            return False
-        reflector = getattr(type(self._long_term_memory), "reflect_session", None)
+        enqueue = getattr(type(self._long_term_memory), "enqueue_session_reflection", None)
+        if not callable(enqueue):
+            # 仅兼容旧的测试/注入对象；生产 EmotionMemobase 始终走持久化队列。
+            reflector = getattr(self._long_term_memory, "reflect_session", None)
+            if not callable(getattr(type(self._long_term_memory), "reflect_session", None)):
+                self._log("[EmotionMemory] ⚠️ 会话反思接口不可用")
+                return False
+            threading.Thread(
+                target=lambda: reflector(patient_id, session_id),
+                name=f"memory-reflection-compat-{session_id}", daemon=True,
+            ).start()
+            return True
+        enqueue = getattr(self._long_term_memory, "enqueue_session_reflection")
         key = (patient_id, session_id)
         with self._consolidation_lock:
             if key in self._pending_consolidations:
                 return True
             self._pending_consolidations.add(key)
 
-        def run() -> None:
-            try:
-                try:
-                    consolidator(patient_id, session_id=session_id)
-                except Exception as exc:
-                    self._log(f"[EmotionMemory] ⚠️ 增量整理失败: {type(exc).__name__}")
-                if callable(reflector):
-                    try:
-                        self._long_term_memory.reflect_session(patient_id, session_id)
-                    except Exception as exc:
-                        self._log(f"[EmotionMemory] ⚠️ 会话反思失败: {type(exc).__name__}")
-            finally:
-                with self._consolidation_lock:
-                    self._pending_consolidations.discard(key)
-
-        threading.Thread(
-            target=run,
-            name=f"memory-consolidate-{session_id}",
-            daemon=True,
-        ).start()
-        return True
+        try:
+            enqueue(patient_id, session_id)
+            wakeup = getattr(self._long_term_memory, "start_memory_worker", None)
+            if callable(wakeup):
+                wakeup()
+            notifier = getattr(self._long_term_memory, "_memory_worker_wakeup", None)
+            if notifier is not None:
+                notifier.set()
+            return True
+        except Exception as exc:
+            self._log(f"[EmotionMemory] ⚠️ 会话反思入队失败: {type(exc).__name__}")
+            return False
+        finally:
+            with self._consolidation_lock:
+                self._pending_consolidations.discard(key)
 
     def _existing_patient_profile(self, patient_id: str) -> dict[str, Any]:
         try:

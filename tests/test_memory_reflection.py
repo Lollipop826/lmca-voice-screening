@@ -256,6 +256,98 @@ def test_session_reflection_deduplicates_overlapping_same_turn_candidates(tmp_pa
     )
 
 
+def test_shallow_single_turn_candidate_does_not_discard_the_multi_turn_one(
+    tmp_path: Path,
+):
+    """A dropped shallow candidate must not abort the whole reflection.
+
+    When the model emits both a single-turn candidate and a multi-turn one that
+    share a turn, the single-turn version is dropped as shallow evidence. That
+    rejection used to also raise ``reflection candidate failed safety
+    validation``, which threw away the well-formed multi-turn candidate and left
+    the session with nothing. The payload below is the real Qwen response from
+    oracle case M02, where both candidates were lost this way.
+    """
+    payload = {
+        "session_summary": {
+            "content": "用户表示喜欢坐在阳台晒太阳，晒一会儿心里会感到安静。",
+            "evidence_turn_ids": ["turn-0", "turn-1"],
+        },
+        "memory_candidates": [
+            {
+                **_candidate("喜欢坐在阳台晒太阳", "我喜欢坐在阳台晒太阳", "turn-0"),
+                "category": "preferences",
+                "suggested_operation": "CANDIDATE",
+            },
+            {
+                **_candidate(
+                    "在阳台晒一会儿太阳会让心里安静下来",
+                    "我喜欢坐在阳台晒太阳\n晒一会儿心里就安静了",
+                    "turn-1",
+                ),
+                "category": "comfort_strategies",
+                "evidence_turn_ids": ["turn-0", "turn-1"],
+                "suggested_operation": "CANDIDATE",
+            },
+        ],
+    }
+    memory = EmotionMemobase(
+        str(tmp_path / "memory.db"),
+        session_reflector=lambda _prompt: payload,
+        logger=lambda _message: None,
+    )
+    memory.capture_turn(
+        "pt-1", "我喜欢坐在阳台晒太阳", "听起来不错",
+        session_id="s1", turn_id="turn-0",
+    )
+    memory.capture_turn(
+        "pt-1", "晒一会儿心里就安静了", "很好",
+        session_id="s1", turn_id="turn-1",
+    )
+
+    result = memory.reflect_session("pt-1", "s1")
+    items = memory.list_memory_items("pt-1", include_deleted=True)
+
+    assert result["status"] == "succeeded", "shallow evidence must not fail the session"
+    # The shallow single-turn candidate is still refused.
+    assert result["rejected_count"] == 1
+    # The multi-turn candidate survives instead of being discarded with it.
+    assert result["candidate_count"] == 1
+    assert [item["content"] for item in items] == [
+        "在阳台晒一会儿太阳会让心里安静下来"
+    ]
+    assert items[0]["status"] == "candidate"
+
+
+def test_malformed_candidate_still_fails_the_reflection(tmp_path: Path):
+    """Structurally invalid payloads must keep failing closed.
+
+    Only the shallow-evidence rejection was downgraded. A candidate with an
+    unknown category is a malformed payload, so it must still abort the session
+    rather than silently storing whatever else the model returned.
+    """
+    payload = {
+        "session_summary": {"content": "", "evidence_turn_ids": []},
+        "memory_candidates": [
+            {
+                **_candidate("患者叫小明", "我叫小明", "turn-1"),
+                "category": "not_a_real_category",
+            }
+        ],
+    }
+    memory = EmotionMemobase(
+        str(tmp_path / "memory.db"),
+        session_reflector=lambda _prompt: payload,
+        logger=lambda _message: None,
+    )
+    memory.capture_turn("pt-1", "我叫小明", "收到", session_id="s1", turn_id="turn-1")
+
+    result = memory.reflect_session("pt-1", "s1")
+
+    assert result["status"] == "failed"
+    assert memory.list_memory_items("pt-1", include_deleted=True) == []
+
+
 def test_session_reflection_retries_without_duplicate_candidates(tmp_path: Path):
     calls = []
     payload = {

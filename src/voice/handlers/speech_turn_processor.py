@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 import threading
 import time
 import traceback
@@ -11,6 +13,7 @@ from typing import Any
 import numpy as np
 
 from ..services import TTSPrewarmHandle
+from src.context_management.emotion_memobase import LOCAL_ACTIVE_MEMORY_MARKER
 from src.tools.emotion import classify_multimodal_with_metadata
 from .agent_output_presenter import AgentOutputPresenter
 from .speech_turn_config import SpeechTurnConfig
@@ -21,6 +24,53 @@ from ..turn_insight import send_turn_insight
 
 
 _DEFAULT_TTS_START = object()
+
+# Emitted by the long-term memory renderer when semantic search ran but nothing
+# cleared the similarity threshold.
+_EMPTY_SEMANTIC_RETRIEVAL_MARKER = "无通过阈值的跨会话长期事件"
+
+# Retrieval sources that mean semantic search was actually attempted for this
+# turn. Anything else (disabled, timeout, superseded, errors) cannot produce a
+# genuine hit.
+_SEMANTIC_RETRIEVAL_SOURCES = frozenset({"primary", "realtime"})
+
+# The local fallback prefixes each line with the originating SQLite item id so
+# downstream telemetry can name exactly which memories reached the prompt.
+_LOCAL_FALLBACK_ITEM_ID_PATTERN = re.compile(r"item_id=([^\s；;]+)")
+
+# Semantic retrieval renders each gist with its Memobase event gist id.  The
+# pattern is anchored on ``event_gist_id=`` so it cannot accidentally match the
+# local fallback's ``item_id=``.
+_SEMANTIC_GIST_ID_PATTERN = re.compile(r"event_gist_id=([^\s；;]+)")
+
+
+def classify_memory_provenance(background: Any) -> tuple[str, list[str]]:
+    """Describe where this turn's long-term memory context actually came from.
+
+    Returns a ``(kind, used_item_ids)`` pair where kind is one of:
+
+    ``semantic``
+        Memobase event-gist search returned at least one item above the
+        similarity threshold. This is the only kind that counts as a retrieval
+        hit.
+    ``local_fallback``
+        Semantic search was unavailable and the query-independent SQLite dump
+        stood in for it. The text is real patient memory, but it was selected by
+        recency rather than by relevance to the current utterance.
+    ``empty``
+        Semantic search ran and nothing cleared the threshold.
+    ``none``
+        No long-term memory context was assembled at all.
+    """
+    text = str(background or "")
+    if not text.strip():
+        return "none", []
+    if LOCAL_ACTIVE_MEMORY_MARKER in text:
+        item_ids = _LOCAL_FALLBACK_ITEM_ID_PATTERN.findall(text)
+        return "local_fallback", item_ids
+    if _EMPTY_SEMANTIC_RETRIEVAL_MARKER in text:
+        return "empty", []
+    return "semantic", _SEMANTIC_GIST_ID_PATTERN.findall(text)
 
 
 class SpeechTurnProcessor:
@@ -175,7 +225,7 @@ class SpeechTurnProcessor:
             "inference_ms": 0.0,
         }
         await self._send_turn_insight(context, "provisional")
-        asyncio.create_task(self._enrich_emotion(context))
+        context.emotion_task = asyncio.create_task(self._enrich_emotion(context))
         return True
 
     async def _verify_speaker(self, context: SpeechTurnContext) -> bool:
@@ -241,6 +291,14 @@ class SpeechTurnProcessor:
             if isinstance(context.extra_meta, dict)
             else {}
         )
+        final_result = extra_meta.get("final_asr_result")
+        if (
+            isinstance(final_result, dict)
+            and final_result.get("source") in {"streaming_final", "fallback_final"}
+            and extra_meta.get("final_asr_audio_samples") == len(context.audio_data)
+        ):
+            self._log("[ASR] 复用本段语音已完成的最终识别结果")
+            return dict(final_result)
         if extra_meta.get("turn_taking") == "soulx":
             text = str(
                 extra_meta.get("soulx_text")
@@ -256,6 +314,7 @@ class SpeechTurnProcessor:
                 "emotion": "neutral",
                 "language": "zh",
                 "event": "speech",
+                "source": "soulx_final",
             }
 
         if self.config.use_ark_asr:
@@ -294,6 +353,25 @@ class SpeechTurnProcessor:
 
     async def _enrich_emotion(self, context: SpeechTurnContext) -> None:
         """Persist one audio file and run optional multimodal inference off-loop."""
+        # 情绪消融：完全跳过 Emotion2Vec / 多模态情绪推理，
+        # 但仍发送最终 turn_insight，避免影响主语音链路。
+        emotion_enabled = (
+            getattr(self.session, "emotion_enabled", True)
+            and os.getenv("ENABLE_EMOTION", "true").strip().lower()
+            not in {"0", "false", "no", "off"}
+        )
+        if not emotion_enabled:
+            context.emotion_metadata = {
+                "source": "disabled",
+                "analysis_status": "disabled",
+                "audio_model_used": False,
+                "dominant": context.dominant_emotion or context.emotion,
+                "inference_ms": 0.0,
+            }
+            self._log("[Emotion] disabled for this session")
+            await self._send_turn_insight(context, "final")
+            return
+
         try:
             context.audio_meta = await self._persist_user_audio(context)
         except Exception as exc:
@@ -363,7 +441,11 @@ class SpeechTurnProcessor:
             await self._send_turn_insight(context, "final")
 
     async def _send_turn_insight(self, context: SpeechTurnContext, state: str) -> None:
-        if state in context.insight_sent:
+        # provisional 只发一次；final 允许在记忆检索完成后刷新。
+        # 情绪任务可能很快降级并先发出 final，此时记忆元数据尚未写入。
+        # TTS 开始前会再发一次完整快照，避免 benchmark 把早到的空快照
+        # 误判成“记忆未命中”。
+        if state == "provisional" and state in context.insight_sent:
             return
         try:
             sent = await send_turn_insight(
@@ -377,6 +459,23 @@ class SpeechTurnProcessor:
                 used_item_ids=context.memory_insight.get("used_item_ids", []),
                 written_item_ids=context.memory_insight.get("written_item_ids", []),
                 summary_changed=context.memory_insight.get("summary_changed", False),
+                retrieval_source=context.memory_insight.get(
+                    "retrieval_source", "none"
+                ),
+                retrieval_kind=context.memory_insight.get("retrieval_kind", "none"),
+                retrieval_hit=context.memory_insight.get("retrieval_hit", False),
+                retrieval_context_chars=context.memory_insight.get(
+                    "retrieval_context_chars", 0
+                ),
+                retrieval_elapsed_ms=context.memory_insight.get(
+                    "retrieval_elapsed_ms", 0.0
+                ),
+                writes_enabled=(
+                    getattr(self.session, "long_term_memory_enabled", True)
+                    and getattr(
+                        self.session, "long_term_memory_writes_enabled", True
+                    )
+                ),
                 risk_decision=context.risk_decision,
                 risk_handled=bool(
                     context.risk_decision
@@ -489,6 +588,17 @@ class SpeechTurnProcessor:
         self._log(
             f"[ASR] ⚠️ turn={context.turn_id} 无最终文字，已拒绝生成并保留音频"
         )
+        if not self._asr_failure(context):
+            await self.connection.send_json(
+                {
+                    "type": "asr_error",
+                    "turn_id": context.turn_id,
+                    "text": "刚才这句我没听清，能再说一遍吗？",
+                    "status_text": "没有识别出文字，请再说一遍",
+                    "reason": "empty_final_transcript",
+                }
+            )
+            self._set_asr_failure(context)
 
     async def _accept_user_turn(self, context: SpeechTurnContext) -> bool:
         """Persist accepted patient evidence before any cancellable output."""
@@ -726,6 +836,7 @@ class SpeechTurnProcessor:
             {
                 "type": "asr_result",
                 "turn_id": context.turn_id,
+                "source": context.asr_source,
                 "text": context.text,
                 "emotion": context.emotion,
                 "emotion_label": context.dominant_emotion or context.emotion,
@@ -862,9 +973,15 @@ class SpeechTurnProcessor:
             return True
         self._mark_memory_status(context, turn_state="GENERATING")
         await self._load_turn_memory(context)
+        # Emotion2Vec+ is launched together with memory retrieval so the two
+        # lookups overlap, but the answer model must not start with SoulX's
+        # provisional ``neutral`` label.  Wait for the final multimodal (or
+        # explicitly documented text fallback) result before building the
+        # Agent prompt.
+        await self._await_emotion_task(context)
         self._log(
             "\n[FLOW] 2️⃣ 🚀 AI流式生成 + 实时TTS - "
-            f"用户情绪: {context.emotion}..."
+            f"用户情绪: {context.dominant_emotion or context.emotion}..."
         )
         context.prepare_agent(
             self._normalize_profile(self.session.patient_profile),
@@ -879,12 +996,28 @@ class SpeechTurnProcessor:
         started_at = time.perf_counter()
         background = ""
         source = "none"
+        memory_enabled = bool(
+            getattr(self.session, "long_term_memory_enabled", True)
+        )
         realtime_turn = (
             context.extra_meta.get("realtime_turn")
             if isinstance(context.extra_meta, dict)
             else None
         )
-        if realtime_turn is not None:
+        if not memory_enabled:
+            if self._get_cross_session_memory is not None:
+                try:
+                    background = await asyncio.to_thread(
+                        self._get_cross_session_memory,
+                        self.session,
+                    )
+                except Exception as exc:
+                    self._log(
+                        "[Memobase] ⚠️ 关闭长期记忆时上下文拼装失败: "
+                        f"{type(exc).__name__}"
+                    )
+            source = "disabled"
+        elif realtime_turn is not None:
             if self.is_superseded(context.generation_token):
                 cancel_prefetch = getattr(realtime_turn, "cancel_memory_prefetch", None)
                 if callable(cancel_prefetch):
@@ -949,10 +1082,28 @@ class SpeechTurnProcessor:
         context.memory_elapsed_ms = (time.perf_counter() - started_at) * 1000
         context.memory_chars = len(str(background or ""))
         context.memory_source = source
+        retrieval_kind, used_item_ids = classify_memory_provenance(background)
+        # Only genuine semantic retrieval counts as a hit. The degraded local
+        # fallback ignores the query entirely, so reporting it as a hit made
+        # ablation runs look like memory was working when it was not.
+        retrieval_hit = (
+            source in {"primary", "realtime"} and retrieval_kind == "semantic"
+        )
+        context.memory_insight.update(
+            {
+                "retrieval_source": source,
+                "retrieval_kind": retrieval_kind,
+                "retrieval_hit": retrieval_hit,
+                "retrieval_context_chars": context.memory_chars,
+                "retrieval_elapsed_ms": context.memory_elapsed_ms,
+                "used_item_ids": used_item_ids,
+            }
+        )
         self._log(
             f"[Latency] turn={context.turn_id or '-'} "
             f"memory_ms={context.memory_elapsed_ms:.1f} "
-            f"memory_chars={context.memory_chars} source={source}"
+            f"memory_chars={context.memory_chars} source={source} "
+            f"kind={retrieval_kind}"
         )
 
     def _start_streaming_agent(self, context: SpeechTurnContext) -> dict:
@@ -973,7 +1124,11 @@ class SpeechTurnProcessor:
                     session_id=self.session.session_id,
                     patient_profile=context.agent_profile,
                     chat_history=context.working_chat_history,
-                    current_emotion=context.emotion,
+                    current_emotion=(
+                        context.dominant_emotion
+                        or context.emotion
+                        or "neutral"
+                    ),
                     should_abort=lambda: self.is_superseded(
                         context.generation_token
                     ),
@@ -1402,7 +1557,11 @@ class SpeechTurnProcessor:
             session_id=self.session.session_id,
             patient_profile=context.agent_profile,
             chat_history=context.working_chat_history,
-            current_emotion=context.emotion,
+            current_emotion=(
+                context.dominant_emotion
+                or context.emotion
+                or "neutral"
+            ),
             should_abort=lambda: self.is_superseded(
                 context.generation_token
             ),
@@ -1520,6 +1679,9 @@ class SpeechTurnProcessor:
         audio_parts: list | None = None,
         start_payload: dict | None | object = _DEFAULT_TTS_START,
     ) -> dict:
+        await self._await_emotion_task(context)
+        # 到这里情绪任务和本轮记忆检索都已完成，刷新最终 insight。
+        await self._send_turn_insight(context, "final")
         await context.tts_prewarm.consume()
         result = await self._stream_tts_audio(
             text,
@@ -1545,6 +1707,33 @@ class SpeechTurnProcessor:
         if audio_parts is not None and result["audio_data"] is not None:
             audio_parts.append(result["audio_data"])
         return result
+
+    async def _await_emotion_task(self, context: SpeechTurnContext) -> None:
+        """Await final emotion inference once, without breaking the turn.
+
+        Emotion inference has a text fallback, so a failed optional model must
+        not discard an otherwise valid response.  Clearing the task before
+        awaiting also prevents TTS from waiting a second time after the Agent
+        prompt has already consumed the result.
+        """
+        task = context.emotion_task
+        if task is None:
+            return
+        context.emotion_task = None
+        try:
+            await task
+        except asyncio.CancelledError:
+            # An optional task may be cancelled on its own, but cancellation
+            # of the speech turn must propagate so a newer utterance can run.
+            owner = asyncio.current_task()
+            if owner is not None and owner.cancelling():
+                raise
+            self._log("[Emotion] ⚠️ 最终情绪任务被取消，沿用临时情绪")
+        except Exception as exc:
+            self._log(
+                "[Emotion] ⚠️ 最终情绪任务失败，沿用临时情绪: "
+                f"{type(exc).__name__}"
+            )
 
     async def _persist_user_audio(
         self,

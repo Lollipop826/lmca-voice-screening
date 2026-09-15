@@ -18,6 +18,7 @@ __all__ = [
     "MemoryItemUpdateRequest",
     "MemoryRevisionConflict",
     "MemoryUpdateRequest",
+    "MirrorOpRequeueRequest",
 ]
 
 
@@ -130,6 +131,12 @@ class MemoryItemDeleteRequest(BaseModel):
         return value
 
 
+class MirrorOpRequeueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(default="api_manual", min_length=1, max_length=200)
+
+
 class MemoryApiController:
     """Register the patient memory API around an injected memory service."""
 
@@ -176,6 +183,12 @@ class MemoryApiController:
             status_code=500,
             detail="INVALID_MEMORY_API_AUTH_DEPENDENCY",
         )
+
+    def _authorize_admin(self, request: Request) -> None:
+        require_admin = getattr(self.auth, "require_admin_user", None)
+        if not callable(require_admin):
+            raise HTTPException(status_code=503, detail="MEMORY_API_AUTH_NOT_CONFIGURED")
+        require_admin(request)
 
     def _call_memory(self, method_name: str, *args, **kwargs):
         method = getattr(self.memory, method_name, None)
@@ -224,7 +237,7 @@ class MemoryApiController:
                 "created_at", "updated_at", "completed_at",
             )
         }
-        if reflection.get("status") == "failed":
+        if reflection.get("status") in {"failed", "dead_letter"}:
             error = str(reflection.get("last_error") or "").lower()
             if "timeout" in error or "timed out" in error:
                 reason = "模型服务响应超时"
@@ -236,6 +249,7 @@ class MemoryApiController:
                 reason = "后台整理暂时不可用"
             view["failure_reason"] = reason
             view["next_retry_at"] = reflection.get("next_retry_at")
+            view["error_code"] = reflection.get("error_code")
         return view
 
     def _call_memory_item(self, patient_id: str, item_id: str, method_name: str, *args, **kwargs):
@@ -464,6 +478,46 @@ class MemoryApiController:
             "data": data,
         }
 
+    async def requeue_session_reflection(
+        self,
+        patient_id: PatientId,
+        request: Request,
+        session_id: str = Query(min_length=1, max_length=120),
+    ):
+        patient_id = self._authorize(request, patient_id, "write")
+        result = self._call_memory(
+            "requeue_session_reflection", patient_id, session_id.strip(), reason="api_manual"
+        )
+        return {"success": bool(result), "data": {"status": "pending" if result else "missing"}}
+
+    async def get_memory_worker_status(self, patient_id: PatientId, request: Request):
+        patient_id = self._authorize(request, patient_id, "read")
+        status = self._call_memory("get_memory_worker_status", patient_id)
+        return {"success": True, "data": status}
+
+    async def check_memobase_consistency(self, patient_id: PatientId, request: Request):
+        patient_id = self._authorize(request, patient_id, "read")
+        result = self._call_memory("check_memobase_consistency", patient_id)
+        return {"success": True, "data": result}
+
+    async def get_admin_memory_worker_status(self, request: Request):
+        self._authorize_admin(request)
+        status = self._call_memory("get_memory_worker_status")
+        return {"success": True, "data": status}
+
+    async def requeue_mirror_op(
+        self,
+        patient_id: PatientId,
+        op_id: str,
+        payload: MirrorOpRequeueRequest,
+        request: Request,
+    ):
+        patient_id = self._authorize(request, patient_id, "write")
+        result = self._call_memory(
+            "requeue_mirror_op", op_id, payload.reason, patient_id=patient_id
+        )
+        return {"success": bool(result), "data": {"status": "pending" if result else "missing"}}
+
     async def update_patient_memory(
         self,
         patient_id: PatientId,
@@ -535,6 +589,36 @@ class MemoryApiController:
                 self.get_session_reflection,
                 ["GET"],
                 "get_session_reflection",
+            ),
+            (
+                "/api/memory/{patient_id}/session-reflection/requeue",
+                self.requeue_session_reflection,
+                ["POST"],
+                "requeue_session_reflection",
+            ),
+            (
+                "/api/memory/{patient_id}/worker-status",
+                self.get_memory_worker_status,
+                ["GET"],
+                "get_memory_worker_status",
+            ),
+            (
+                "/api/memory/{patient_id}/mirror-consistency",
+                self.check_memobase_consistency,
+                ["GET"],
+                "check_memobase_consistency",
+            ),
+            (
+                "/api/memory/{patient_id}/mirror-ops/{op_id}/requeue",
+                self.requeue_mirror_op,
+                ["POST"],
+                "requeue_mirror_op",
+            ),
+            (
+                "/api/admin/memory/worker-status",
+                self.get_admin_memory_worker_status,
+                ["GET"],
+                "get_admin_memory_worker_status",
             ),
             (
                 "/api/memory/{patient_id}/items",

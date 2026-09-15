@@ -1,0 +1,70 @@
+{
+  "fixture_id": "memory-ablation-protocol-v1",
+  "patient_id": "pt-memory-ablation-v1",
+  "profile": {
+    "name": "记忆消融测试患者",
+    "gender": "female",
+    "age": 68,
+    "education_years": 9
+  },
+  "memory": {
+    "events": [
+      {
+        "id": "event-daughter-conflict",
+        "text": "上周和女儿因为联系频率发生争执，女儿后来暂时没有回复消息。"
+      },
+      {
+        "id": "event-community-walk",
+        "text": "最近每周三上午会和邻居在小区里散步。"
+      }
+    ],
+    "facts": [
+      {
+        "id": "fact-sleep",
+        "text": "最近项目赶工，常常午夜后才停止工作，第二天容易睡不好。"
+      }
+    ],
+    "preferences": [
+      {
+        "id": "preference-phone-away",
+        "text": "睡前反复看工作消息会让入睡更困难，愿意尝试把手机放远一点。"
+      }
+    ],
+    "narrative": "用于记忆消融实验的隔离患者；只允许在相关时引用长期记忆。"
+  },
+  "cases": [
+    {
+      "sample_id": "memory-family-conflict-followup",
+      "user_text": "我这两天还是因为女儿不回消息觉得难受。",
+      "memory_facts": [
+        "上周和女儿因为联系频率发生争执，女儿后来暂时没有回复消息。"
+      ],
+      "scenario": "相关记忆：家庭冲突后续"
+    },
+    {
+      "sample_id": "memory-sleep-followup",
+      "user_text": "最近又睡不好，晚上总忍不住看工作消息。",
+      "memory_facts": [
+        "最近项目赶工，常常午夜后才停止工作，第二天容易睡不好。",
+        "睡前反复看工作消息会让入睡更困难，愿意尝试把手机放远一点。"
+      ],
+      "scenario": "相关记忆：睡眠和工作消息习惯"
+    },
+    {
+      "sample_id": "memory-community-walk-followup",
+      "user_text": "今天上午出门走了一圈，回来感觉轻松些。",
+      "memory_facts": [
+        "最近每周三上午会和邻居在小区里散步。"
+      ],
+      "scenario": "弱相关记忆：日常活动"
+    },
+    {
+      "sample_id": "memory-unrelated-control",
+      "user_text": "今天买菜回来，发现钥匙忘在家里了，只好在门口等了半天。",
+      "memory_facts": [
+        "没有与忘带钥匙或买菜相关的既有记忆。"
+      ],
+      "scenario": "无关控制：应克制，不应硬提旧记忆"
+    }
+  ]
+}

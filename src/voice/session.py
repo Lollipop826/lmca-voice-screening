@@ -13,6 +13,7 @@ class VoiceTurnTakingState:
 
     soulx_healthy: bool = False
     soulx_barge_in_active: bool = False
+    soulx_input_overlaps_output: bool = False
     soulx_last_state: str = ""
     soulx_last_error: str = ""
     interrupted_asr_prefix: str = ""
@@ -21,6 +22,7 @@ class VoiceTurnTakingState:
     def reset(self) -> None:
         self.soulx_healthy = False
         self.soulx_barge_in_active = False
+        self.soulx_input_overlaps_output = False
         self.soulx_last_state = ""
         self.soulx_last_error = ""
         self.interrupted_asr_prefix = ""
@@ -33,6 +35,7 @@ class VoiceTurnTakingState:
         self.soulx_last_error = error_text
         self.soulx_healthy = False
         self.soulx_barge_in_active = False
+        self.soulx_input_overlaps_output = False
         return changed
 
     def mark_soulx_connected(self) -> bool:
@@ -257,6 +260,12 @@ class VoiceSession:
     lifecycle: VoiceLifecycleState = field(default_factory=VoiceLifecycleState)
     memory_engine: Any = None
     long_term_memory_enabled: bool = True
+    # Per-session write gate used by read-only evaluations.  The process-wide
+    # release flag remains the upper bound; a client may only turn writes off.
+    long_term_memory_writes_enabled: bool = True
+    # Same rule for emotion inference: the session may opt out, but cannot
+    # enable a process-wide feature that was disabled at startup.
+    emotion_enabled: bool = True
     turn_sequence: int = 0
     accepted_turn_ids: set[str] = field(default_factory=set)
     history_message_keys: set[tuple[str, str, str]] = field(default_factory=set)

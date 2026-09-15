@@ -16,6 +16,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 
 from src.db import database
 
+from .page_responses import message_page
+
 
 class AuthService:
     """Own password hashing, signed login sessions and access checks."""
@@ -384,8 +386,9 @@ class AuthController:
             return RedirectResponse(url=target, status_code=307)
         html_file = self.static_dir / "login.html"
         if not html_file.exists():
-            return HTMLResponse(
-                "<h1>登录页面未找到</h1>",
+            return message_page(
+                "登录页面未找到",
+                "登录页面暂时无法打开。请稍后重试；如果仍无法访问，请联系管理员。",
                 status_code=404,
             )
         html = html_file.read_text(encoding="utf-8").replace(
@@ -679,9 +682,9 @@ class AuthController:
                 status_code=307,
             )
         if not self.auth.is_admin_user(user):
-            return HTMLResponse(
-                "<h1>无权限访问管理员后台</h1>"
-                '<p><a href="/">返回评估首页</a></p>',
+            return message_page(
+                "需要管理员权限",
+                "当前账号无法访问管理页面。您可以返回继续陪伴，如需管理权限，请联系管理员。",
                 status_code=403,
             )
         return self._static_html("admin.html", "管理员页面未找到")
@@ -783,8 +786,9 @@ class AuthController:
                 content=html_file.read_text(encoding="utf-8"),
                 headers=self._NO_CACHE_HEADERS,
             )
-        return HTMLResponse(
-            f"<h1>{missing_message}</h1>",
+        return message_page(
+            missing_message,
+            "页面暂时无法打开。请返回陪伴首页；如果仍无法访问，请联系管理员。",
             status_code=404,
         )
 

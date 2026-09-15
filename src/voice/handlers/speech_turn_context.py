@@ -25,6 +25,7 @@ class SpeechTurnContext:
     event: str = ""
     asr_source: str = "final"
     tts_emotion: str = "neutral"
+    emotion_task: Any = None
     audio_meta: dict | None = None
     user_history_entry: dict = field(default_factory=dict)
     agent_profile: dict = field(default_factory=dict)
@@ -47,11 +48,17 @@ class SpeechTurnContext:
         self.language = str(payload.get("language") or "")
         self.event = str(payload.get("event") or "")
         self.asr_source = str(payload.get("source") or "final")
-        self.tts_emotion = (
-            "gentle"
-            if self.emotion in {"sad", "angry", "fearful"}
-            else "neutral"
-        )
+        self.tts_emotion = {
+            "sad": "gentle",
+            "sadness": "gentle",
+            "fear": "gentle",
+            "fearful": "gentle",
+            "anxiety": "gentle",
+            "angry": "calm",
+            "anger": "calm",
+            "happy": "happy",
+            "joy": "happy",
+        }.get(self.emotion, "neutral")
         self.user_history_entry = {
             "role": "user",
             "content": self.text,
@@ -80,8 +87,14 @@ class SpeechTurnContext:
             key=self.emotion_scores.get,
         )
         self.user_history_entry["emotions"] = dict(self.emotion_scores)
-        if self.dominant_emotion in {"sadness", "anger", "fear", "anxiety"}:
-            self.tts_emotion = "gentle"
+        self.tts_emotion = {
+            "sadness": "gentle",
+            "fear": "gentle",
+            "anxiety": "gentle",
+            "anger": "calm",
+            "joy": "happy",
+            "confusion": "gentle",
+        }.get(self.dominant_emotion, self.tts_emotion)
 
     def prepare_agent(self, profile: dict, chat_history: list, now: float) -> None:
         self.agent_profile = profile

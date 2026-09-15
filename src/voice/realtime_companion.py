@@ -45,46 +45,22 @@ def _normalise_for_echo(text: str) -> str:
 @dataclass(frozen=True)
 class RealtimeCompanionConfig:
     enabled: bool
+    external_asr: bool = False
     emotion_interval_s: float = 0.8
     emotion_window_s: float = 3.0
     asr_chunk_s: float = 0.2
     asr_queue_size: int = 100
-    memory_timeout_s: float = 3.0
+    memory_timeout_s: float = 0.25
+    memory_prefetch_stability_s: float = 0.35
+    memory_prefetch_min_interval_s: float = 0.5
 
 
 class RealtimeCompanion:
-    """Own streaming ASR, rolling emotion checks and memory prefetch per connection."""
+    """Run rolling emotion checks and optional streaming ASR per connection."""
 
     _RISK_PHRASES = ("自杀", "想死", "不想活", "结束生命")
-    _DISTRESS_PHRASES = (
-        "很难过",
-        "好难过",
-        "很伤心",
-        "好伤心",
-        "很悲伤",
-        "好悲伤",
-        "心里很难受",
-        "真的很难受",
-        "特别难受",
-        "什么都没意思",
-        "什么都没有意思",
-        "没有意义",
-        "毫无意义",
-        "看不到希望",
-        "很绝望",
-        "好绝望",
-        "很无望",
-        "好无望",
-        "撑不住",
-    )
-    _COMFORT_TEXT = {
-        "sadness": "我在听，您慢慢说。",
-        "anger": "我听见您很难受，我在听。",
-        "fear": "慢慢来，我陪着您。",
-        "anxiety": "我在听，您继续说。",
-        "joy": "这很不容易，您做得很好。",
-    }
-    _DISTRESS_TEXT = "听起来您现在很难受，我在听，您可以慢慢说。"
+    _LISTENING_TEXT = "我在听，您慢慢说。"
+    _BACKCHANNEL_TEXT = "嗯嗯"
     _SAFETY_TEXT = "听到您这样说，我很担心您现在的安全。请先不要独处，找一位您信任的人陪在身边。"
 
     def __init__(
@@ -109,12 +85,13 @@ class RealtimeCompanion:
         self._classify_window = classify_window
         self._now = now_factory
         self._log = logger
+        self._external_asr = bool(config.external_asr)
         self._active: RealtimeTurn | None = None
         self._comfort_count = 0
-        self._last_comfort_at = 0.0
+        self._last_comfort_at = float("-inf")
         self._risk_announced = False
-        self._emotion_streaks: dict[str, int] = {}
         self._comfort_task = None
+        self._comfort_kind = ""
 
     async def observe_frame(
         self,
@@ -130,12 +107,11 @@ class RealtimeCompanion:
         if not was_speaking and is_speaking:
             await self._cancel_comfort()
             self._comfort_count = 0
-            self._emotion_streaks.clear()
             if state is not None:
                 await state.aclose()
             state = RealtimeTurn(self)
             self._active = state
-            state.start()
+            state.start(use_streaming_asr=not self._external_asr)
         if state is None:
             return None
         state.observe_audio(audio)
@@ -145,21 +121,128 @@ class RealtimeCompanion:
             return state
         return None
 
+    def set_external_asr(self, enabled: bool) -> None:
+        self._external_asr = bool(enabled)
+
+    async def fallback_to_local_asr(self) -> None:
+        if not self._external_asr:
+            return
+        self._external_asr = False
+        state, self._active = self._active, None
+        if state is not None:
+            await state.aclose()
+        if self._comfort_kind in {"incomplete", "backchannel"}:
+            await self._cancel_comfort()
+
+    async def observe_soulx_frame(
+        self,
+        audio: np.ndarray,
+        *,
+        state: str,
+        text: str = "",
+        detail_state: str = "",
+        speech_detected: bool | None = None,
+        complete_audio: np.ndarray | None = None,
+    ) -> "RealtimeTurn | None":
+        """Consume one SoulX frame without starting a second ASR stream."""
+        if not self.config.enabled:
+            return None
+        normalized_state = str(state or "").strip().lower()
+        is_speaking = (
+            bool(self._active)
+            or speech_detected is True
+            or normalized_state in {"nonidle", "speak"}
+        )
+        was_speaking = bool(self._active)
+        if not was_speaking and not is_speaking:
+            return None
+        if not was_speaking:
+            await self._cancel_comfort()
+            self._comfort_count = 0
+            self._active = RealtimeTurn(self)
+            self._active.start(use_streaming_asr=False)
+        turn = self._active
+        if turn is None:
+            return None
+        turn.speech_detected = speech_detected
+        # incomplete_wait continues the same unfinished expression. A timeout
+        # that commits a formal turn must never also start an acknowledgement.
+        turn.semantic_incomplete = str(detail_state or "").strip().lower() in {
+            "incomplete",
+            "incomplete_wait",
+        }
+        if speech_detected is True and self.listening_prompt_playing:
+            await self._cancel_comfort()
+        if complete_audio is not None and not was_speaking:
+            turn.observe_audio(complete_audio)
+        else:
+            turn.observe_audio(audio)
+        if text:
+            await turn.observe_external_text(
+                text,
+                is_final=normalized_state == "speak",
+            )
+        if complete_audio is not None:
+            turn.finish()
+            self._active = None
+            return turn
+        if normalized_state != "speak":
+            await self.observe_semantic_incomplete()
+        return None
+
+    def _incomplete_response(self) -> tuple[str, str] | None:
+        turn = self._active
+        if (
+            not self.config.enabled
+            or turn is None
+            or turn._finished
+            or turn.echo_suspected
+            or not turn.semantic_incomplete
+        ):
+            return None
+        if turn.speech_detected is True and turn.audio_duration_s > 5.0:
+            return self._BACKCHANNEL_TEXT, "backchannel"
+        if turn.speech_detected is False and turn.audio_duration_s > 7.0:
+            return self._LISTENING_TEXT, "incomplete"
+        return None
+
+    async def observe_semantic_incomplete(self) -> None:
+        """Recheck duration and current speech on every unfinished SoulX frame."""
+        response = self._incomplete_response()
+        if response is not None:
+            text, kind = response
+            await self._schedule_comfort(text, kind, False)
+
+    @property
+    def backchannel_playing(self) -> bool:
+        return self._comfort_is_playing("backchannel")
+
+    @property
+    def listening_prompt_playing(self) -> bool:
+        return self._comfort_is_playing("incomplete")
+
+    def _comfort_is_playing(self, kind: str) -> bool:
+        return (
+            self._comfort_kind == kind
+            and self._comfort_task is not None
+            and not self._comfort_task.done()
+        )
+
     async def reset(self) -> None:
         state, self._active = self._active, None
         if state is not None:
             await state.aclose()
         await self._cancel_comfort()
         self._comfort_count = 0
-        self._last_comfort_at = 0.0
+        self._last_comfort_at = float("-inf")
         self._risk_announced = False
-        self._emotion_streaks.clear()
 
     async def close(self) -> None:
         await self.reset()
 
     async def _cancel_comfort(self) -> None:
         task, self._comfort_task = self._comfort_task, None
+        self._comfort_kind = ""
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
@@ -169,57 +252,16 @@ class RealtimeCompanion:
         text: str,
         scores: dict[str, float],
     ) -> None:
-        if not self._active or self._active.echo_suspected:
-            return
-        if self._is_risk_text(text):
-            await self._schedule_comfort(self._SAFETY_TEXT, "safety", True)
-            return
-
-        for label, threshold in (
-            ("sadness", 0.60),
-            ("anger", 0.50),
-            ("fear", 0.50),
-            ("anxiety", 0.60),
-        ):
-            self._emotion_streaks[label] = (
-                self._emotion_streaks.get(label, 0) + 1
-                if scores.get(label, 0.0) >= threshold
-                else 0
-            )
-
-        label = ""
-        if scores.get("sadness", 0.0) >= 0.80:
-            label = "sadness"
-        elif scores.get("anger", 0.0) >= 0.70:
-            label = "anger"
-        elif scores.get("fear", 0.0) >= 0.75:
-            label = "fear"
-        elif scores.get("anxiety", 0.0) >= 0.80:
-            label = "anxiety"
-        elif scores.get("joy", 0.0) >= 0.80:
-            label = "joy"
-        else:
-            label = next(
-                (
-                    name
-                    for name in ("sadness", "anger", "fear", "anxiety")
-                    if self._emotion_streaks.get(name, 0) >= 2
-                ),
-                "",
-            )
-        if label:
-            await self._schedule_comfort(
-                self._COMFORT_TEXT[label], label, False
-            )
+        # Ordinary acknowledgements are gated by SoulX and utterance duration.
+        # Keep the existing immediate safety path for explicit risk expressions.
+        await self.observe_partial_text(text)
 
     async def observe_partial_text(self, text: str) -> None:
-        """Respond to explicit distress even when the rolling model is unavailable."""
+        """Keep explicit safety alerts independent of ordinary acknowledgements."""
         if not self._active or self._active.echo_suspected:
             return
         if self._is_risk_text(text):
             await self._schedule_comfort(self._SAFETY_TEXT, "safety", True)
-        elif self._is_distress_text(text):
-            await self._schedule_comfort(self._DISTRESS_TEXT, "distress", False)
 
     async def _schedule_comfort(
         self,
@@ -245,8 +287,9 @@ class RealtimeCompanion:
         else:
             self._comfort_count += 1
             self._last_comfort_at = now
+        self._comfort_kind = kind
         self._comfort_task = asyncio.create_task(
-            self._play_comfort(text, kind, safety)
+            self._play_comfort(text, kind, safety, turn=self._active)
         )
 
     async def _play_comfort(
@@ -254,8 +297,15 @@ class RealtimeCompanion:
         text: str,
         kind: str,
         safety: bool,
+        *,
+        turn: "RealtimeTurn | None" = None,
     ) -> None:
         try:
+            if kind in {"incomplete", "backchannel"} and (
+                turn is not self._active
+                or self._incomplete_response() != (text, kind)
+            ):
+                return
             await self.connection.send_json(
                 {
                     "type": "companion_message",
@@ -319,10 +369,6 @@ class RealtimeCompanion:
     def _is_risk_text(cls, text: str) -> bool:
         return any(phrase in str(text or "") for phrase in cls._RISK_PHRASES)
 
-    @classmethod
-    def _is_distress_text(cls, text: str) -> bool:
-        return any(phrase in str(text or "") for phrase in cls._DISTRESS_PHRASES)
-
 
 class RealtimeTurn:
     """State that survives from a detected speech start through final confirmation."""
@@ -332,6 +378,9 @@ class RealtimeTurn:
         self._queue = asyncio.Queue(maxsize=companion.config.asr_queue_size)
         self._window: deque[np.ndarray] = deque()
         self._window_samples = 0
+        self._audio_samples = 0
+        self.speech_detected: bool | None = None
+        self.semantic_incomplete = False
         self._partial_history: deque[tuple[float, str]] = deque()
         self._stream_task = None
         self._emotion_task = None
@@ -348,9 +397,16 @@ class RealtimeTurn:
         self._memory_query_text = ""
         self._memory_task = None
         self._memory_result = ""
+        self._memory_query_started_at = float("-inf")
 
-    def start(self) -> None:
-        self._stream_task = asyncio.create_task(self._run_stream())
+    def start(self, *, use_streaming_asr: bool = True) -> None:
+        if use_streaming_asr:
+            self._stream_task = asyncio.create_task(self._run_stream())
+
+    @property
+    def audio_duration_s(self) -> float:
+        """Audio since this utterance began, including pauses but not pre-roll."""
+        return self._audio_samples / 16000.0
 
     def observe_audio(self, audio: np.ndarray) -> None:
         if self._finished:
@@ -358,21 +414,25 @@ class RealtimeTurn:
         samples = np.asarray(audio, dtype=np.float32).reshape(-1).copy()
         if not samples.size:
             return
+        self._audio_samples += len(samples)
         self._window.append(samples)
         self._window_samples += len(samples)
         keep_samples = int(self.companion.config.emotion_window_s * 16000)
         while self._window and self._window_samples - len(self._window[0]) >= keep_samples:
             self._window_samples -= len(self._window.popleft())
-        try:
-            self._queue.put_nowait(samples)
-        except asyncio.QueueFull:
-            self._stream_error = RuntimeError("实时 ASR 队列积压")
+        if self._stream_task is not None:
+            try:
+                self._queue.put_nowait(samples)
+            except asyncio.QueueFull:
+                self._stream_error = RuntimeError("实时 ASR 队列积压")
         self._schedule_emotion()
 
     def finish(self) -> None:
         if self._finished:
             return
         self._finished = True
+        if self._stream_task is None:
+            return
         try:
             self._queue.put_nowait(None)
         except asyncio.QueueFull:
@@ -410,19 +470,20 @@ class RealtimeTurn:
         return self._final_received
 
     async def memory_for_final(self, text: str) -> str:
-        if self.echo_suspected:
+        if self.echo_suspected or not getattr(
+            self.companion.session, "long_term_memory_enabled", True
+        ):
+            self.cancel_memory_prefetch()
             return ""
         final_text = str(text or "").strip()
         if not final_text:
             return ""
         if (
             self._memory_task is not None
-            and _within_edit_distance(final_text, self._memory_query_text, 3)
+            and not self._memory_task.cancelled()
+            and _normalise_for_echo(final_text) == _normalise_for_echo(self._memory_query_text)
         ):
-            if _normalise_for_echo(final_text) == _normalise_for_echo(self._memory_query_text):
-                task = self._memory_task
-            else:
-                task = self._start_memory_query(final_text)
+            task = self._memory_task
         else:
             task = self._start_memory_query(final_text)
         if task is None:
@@ -470,6 +531,18 @@ class RealtimeTurn:
                 await stream.aclose()
 
     async def _on_result(self, text: str, is_final: bool) -> None:
+        await self._consume_text(text, is_final=is_final, emit=True)
+
+    async def observe_external_text(self, text: str, *, is_final: bool) -> None:
+        await self._consume_text(text, is_final=is_final, emit=False)
+
+    async def _consume_text(
+        self,
+        text: str,
+        *,
+        is_final: bool,
+        emit: bool,
+    ) -> None:
         text = str(text or "").strip()
         if not text:
             return
@@ -483,45 +556,65 @@ class RealtimeTurn:
             self._partial_history.popleft()
         self.echo_suspected = self._is_suspected_echo(text)
         if self.echo_suspected:
-            await self.companion.connection.send_json(
-                {"type": "asr_echo_suspected", "text": text}
-            )
+            if emit:
+                await self.companion.connection.send_json(
+                    {"type": "asr_echo_suspected", "text": text}
+                )
             return
-        await self.companion.connection.send_json(
-            {"type": "asr_partial", "text": text, "final": bool(is_final)}
-        )
-        await self.companion.observe_partial_text(text)
+        if emit:
+            await self.companion.connection.send_json(
+                {"type": "asr_partial", "text": text, "final": bool(is_final)}
+            )
+        if not is_final:
+            await self.companion.observe_partial_text(text)
         self._maybe_prefetch(text, now)
 
     def _maybe_prefetch(self, text: str, now: float) -> None:
-        if len(text) < 5 or self.echo_suspected:
+        if (
+            len(text) < 5
+            or self.echo_suspected
+            or not getattr(self.companion.session, "long_term_memory_enabled", True)
+        ):
+            return
+        if self._memory_task is not None and not self._memory_task.done():
+            return
+        if now - self._memory_query_started_at < max(
+            0.05, self.companion.config.memory_prefetch_min_interval_s
+        ):
             return
         prior = next(
             (
                 value
                 for timestamp, value in reversed(self._partial_history)
-                if timestamp <= now - 1.0
+                if timestamp <= now - max(
+                    0.05, self.companion.config.memory_prefetch_stability_s
+                )
             ),
             "",
         )
         if not prior or not _within_edit_distance(text, prior, 2):
             return
-        if self._memory_query_text and _within_edit_distance(
-            text,
-            self._memory_query_text,
-            3,
+        if (
+            self._memory_task is not None
+            and not self._memory_task.cancelled()
+            and _normalise_for_echo(text) == _normalise_for_echo(self._memory_query_text)
         ):
             return
         self._start_memory_query(text)
 
     def _start_memory_query(self, text: str):
         patient_id = self.companion.session.lifecycle.current_patient_id
-        if not patient_id or self.companion.patient_memory_service is None:
+        if (
+            not patient_id
+            or self.companion.patient_memory_service is None
+            or not getattr(self.companion.session, "long_term_memory_enabled", True)
+        ):
             return None
         self.cancel_memory_prefetch()
         self._memory_query_id += 1
         query_id = self._memory_query_id
         self._memory_query_text = text
+        self._memory_query_started_at = self.companion._now()
         self._memory_task = asyncio.create_task(
             self._retrieve_memory(query_id, text)
         )

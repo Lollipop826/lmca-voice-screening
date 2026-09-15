@@ -7,13 +7,13 @@ import sys
 sys.path.insert(0, '.')
 
 import json
+import math
 import time
 import numpy as np
 from pathlib import Path
 from typing import Dict, List
 from dataclasses import dataclass
 from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
-import psutil
 import os
 
 
@@ -28,7 +28,7 @@ class BenchmarkResult:
     p50_latency_ms: float
     p95_latency_ms: float
     p99_latency_ms: float
-    model_size_mb: float
+    model_size_mb: float | None
     memory_usage_mb: float
     classification_report: dict
     confusion_matrix: list
@@ -53,8 +53,9 @@ class EmotionModelBenchmark:
         'anxious': 'anxiety',
     }
 
-    def __init__(self, testset_dir: str):
+    def __init__(self, testset_dir: str, *, allow_synthetic: bool = False):
         self.testset_dir = Path(testset_dir)
+        self.allow_synthetic = bool(allow_synthetic)
         self.test_samples = []
         self.results = {}
 
@@ -68,8 +69,60 @@ class EmotionModelBenchmark:
                 f"请先运行: python scripts/prepare_emotion_testset.py"
             )
 
-        manifest = json.load(open(manifest_path, encoding='utf-8'))
-        self.test_samples = manifest['samples']
+        with manifest_path.open(encoding='utf-8') as source:
+            manifest = json.load(source)
+        samples = manifest.get('samples')
+        if not isinstance(samples, list) or not samples:
+            raise ValueError("测试集清单没有有效 samples")
+
+        invalid_sources = [
+            str(sample.get('sample_id') or index)
+            for index, sample in enumerate(samples)
+            if str(sample.get('source') or '').lower() in {'mock', 'synthetic'}
+        ]
+        if invalid_sources and not self.allow_synthetic:
+            raise ValueError(
+                f"测试集包含 {len(invalid_sources)} 条 mock/synthetic 样本，"
+                "不能用于报告模型效果；仅调试时可显式加 --allow-synthetic"
+            )
+
+        resolved_samples = []
+        missing_files = []
+        for index, sample in enumerate(samples):
+            item = dict(sample)
+            raw_path = str(item.get('audio_path') or '').replace('\\', '/')
+            path = Path(raw_path)
+            if not path.is_absolute():
+                repository_candidate = Path.cwd() / path
+                testset_candidate = self.testset_dir / path
+                path = (
+                    repository_candidate
+                    if repository_candidate.exists()
+                    else testset_candidate
+                )
+            path = path.resolve()
+            item['audio_path'] = str(path)
+            if not path.is_file():
+                missing_files.append(str(item.get('sample_id') or index))
+            resolved_samples.append(item)
+        if missing_files:
+            preview = ', '.join(missing_files[:5])
+            raise FileNotFoundError(
+                f"测试集有 {len(missing_files)} 个音频文件不存在（例如 {preview}），"
+                "已拒绝静默跳过"
+            )
+
+        observed_labels = {
+            str(sample.get('true_emotion') or '') for sample in resolved_samples
+        }
+        missing_labels = sorted(set(self.EMOTION_LABELS) - observed_labels)
+        unknown_labels = sorted(observed_labels - set(self.EMOTION_LABELS))
+        if missing_labels or unknown_labels:
+            raise ValueError(
+                "测试集标签不完整或非法："
+                f"missing={missing_labels}, unknown={unknown_labels}"
+            )
+        self.test_samples = resolved_samples
 
         print(f"✅ 加载测试集: {len(self.test_samples)} 条样本")
 
@@ -91,13 +144,18 @@ class EmotionModelBenchmark:
 
     def _get_memory_usage_mb(self) -> float:
         """获取当前进程内存占用（MB）"""
-        process = psutil.Process(os.getpid())
-        return process.memory_info().rss / 1024 / 1024
+        # /proc gives current RSS and avoids making the benchmark depend on
+        # psutil, which is not part of the project's runtime environment.
+        try:
+            resident_pages = int(Path("/proc/self/statm").read_text().split()[1])
+            return resident_pages * os.sysconf("SC_PAGE_SIZE") / 1024 / 1024
+        except (OSError, ValueError, IndexError):
+            return 0.0
 
-    def _get_model_size_mb(self, model_path: str) -> float:
+    def _get_model_size_mb(self, model_path: str) -> float | None:
         """获取模型文件大小（MB）"""
         if not os.path.exists(model_path):
-            return 0.0
+            return None
 
         total_size = 0
         for root, dirs, files in os.walk(model_path):
@@ -152,7 +210,8 @@ class EmotionModelBenchmark:
         print(f"✅ 模型加载完成")
         print(f"   耗时: {load_time:.2f}秒")
         print(f"   内存增量: {mem_usage:.1f} MB")
-        print(f"   模型大小: {model_size:.1f} MB\n")
+        model_size_label = f"{model_size:.1f} MB" if model_size is not None else "未知"
+        print(f"   模型大小: {model_size_label}\n")
 
         predictions = []
         true_labels = []
@@ -164,10 +223,6 @@ class EmotionModelBenchmark:
             audio_path = sample['audio_path']
             true_emotion = sample['true_emotion']
             age_group = sample.get('age_group', 'unknown')
-
-            if not audio_path or not os.path.isfile(audio_path):
-                print(f"   ⚠️ 样本 {i+1} 音频不存在，跳过")
-                continue
 
             # 推理
             start = time.perf_counter()
@@ -197,8 +252,10 @@ class EmotionModelBenchmark:
                     print(f"   进度: {i+1}/{len(self.test_samples)}")
 
             except Exception as e:
-                print(f"   ⚠️ 样本 {i+1} 失败: {e}")
-                continue
+                raise RuntimeError(
+                    f"样本 {i+1}/{len(self.test_samples)} "
+                    f"({sample.get('sample_id')}) 推理失败"
+                ) from e
 
         print(f"✅ 推理完成\n")
 
@@ -225,9 +282,9 @@ class EmotionModelBenchmark:
             f1_weighted=f1_weighted,
             f1_macro=f1_macro,
             avg_latency_ms=sum(latencies) / len(latencies),
-            p50_latency_ms=latencies_sorted[int(n * 0.5)],
-            p95_latency_ms=latencies_sorted[int(n * 0.95)],
-            p99_latency_ms=latencies_sorted[int(n * 0.99)],
+            p50_latency_ms=latencies_sorted[max(0, math.ceil(n * 0.50) - 1)],
+            p95_latency_ms=latencies_sorted[max(0, math.ceil(n * 0.95) - 1)],
+            p99_latency_ms=latencies_sorted[max(0, math.ceil(n * 0.99) - 1)],
             model_size_mb=model_size,
             memory_usage_mb=mem_usage,
             classification_report=classification_report(
@@ -255,12 +312,9 @@ class EmotionModelBenchmark:
         print("=" * 70)
         print("【模型2】Wav2Vec2-Emotion-CN")
         print("=" * 70)
-        print("⚠️ 未实现，需要安装额外依赖\n")
-
-        # TODO: 实现 Wav2Vec2 测试
-        # from transformers import Wav2Vec2ForSequenceClassification, Wav2Vec2FeatureExtractor
-
-        return None
+        raise NotImplementedError(
+            "Wav2Vec2-Emotion-CN benchmark 尚未实现，不能伪装成模型对比结果"
+        )
 
     def benchmark_mfcc_svm(self) -> BenchmarkResult:
         """
@@ -270,14 +324,9 @@ class EmotionModelBenchmark:
         print("=" * 70)
         print("【模型3】MFCC + SVM (Baseline)")
         print("=" * 70)
-        print("⚠️ 未实现，需要训练 SVM 分类器\n")
-
-        # TODO: 实现传统方法
-        # 1. 提取 MFCC 特征
-        # 2. 加载预训练 SVM
-        # 3. 预测
-
-        return None
+        raise NotImplementedError(
+            "MFCC + SVM benchmark 尚未实现，不能伪装成模型对比结果"
+        )
 
     def _print_result(self, result: BenchmarkResult):
         """打印单个模型的结果"""
@@ -292,7 +341,12 @@ class EmotionModelBenchmark:
         print(f"P95 延迟:              {result.p95_latency_ms:.2f} ms")
         print(f"P99 延迟:              {result.p99_latency_ms:.2f} ms")
         print()
-        print(f"模型大小:              {result.model_size_mb:.1f} MB")
+        model_size_label = (
+            f"{result.model_size_mb:.1f} MB"
+            if result.model_size_mb is not None
+            else "未知（远程模型 ID 未解析到本地目录）"
+        )
+        print(f"模型大小:              {model_size_label}")
         print(f"内存占用:              {result.memory_usage_mb:.1f} MB")
         print()
 
@@ -328,10 +382,7 @@ class EmotionModelBenchmark:
         results = {}
 
         if 'emotion2vec' in models:
-            try:
-                results['emotion2vec'] = self.benchmark_emotion2vec()
-            except Exception as e:
-                print(f"❌ Emotion2Vec 测试失败: {e}\n")
+            results['emotion2vec'] = self.benchmark_emotion2vec()
 
         if 'wav2vec2' in models:
             results['wav2vec2'] = self.benchmark_wav2vec2_cn()
@@ -404,7 +455,12 @@ class EmotionModelBenchmark:
 
         # 模型大小
         table += "| 模型大小 (MB) | " + " | ".join([
-            f"{r.model_size_mb:.1f}" for r in valid_results.values()
+            (
+                f"{r.model_size_mb:.1f}"
+                if r.model_size_mb is not None
+                else "未知"
+            )
+            for r in valid_results.values()
         ]) + " |\n"
 
         # 内存占用
@@ -437,6 +493,11 @@ def main():
         default='tests/emotion_benchmark/results.json',
         help='结果输出路径'
     )
+    parser.add_argument(
+        '--allow-synthetic',
+        action='store_true',
+        help='仅用于管线调试；允许 mock/synthetic 数据（不可用于报告效果）',
+    )
 
     args = parser.parse_args()
 
@@ -451,7 +512,10 @@ def main():
     print("=" * 70)
     print()
 
-    benchmark = EmotionModelBenchmark(args.testset)
+    benchmark = EmotionModelBenchmark(
+        args.testset,
+        allow_synthetic=args.allow_synthetic,
+    )
     benchmark.load_testset()
 
     benchmark.run_all(models=models_to_test)

@@ -1,0 +1,22 @@
+[
+  {"id":"X01","kind":"stable_preference","turns":[["我听苏州评弹的时候，心里会慢慢静下来。","听起来这对你很有帮助。"]],"category":"comfort_strategies","allowed_categories":["comfort_strategies","preferences"],"content_all_of":[["评弹"],["静","平静","安静"]],"expect":"active"},
+  {"id":"X02","kind":"multi_turn_comfort","turns":[["我一烦就喜欢去楼下花园走走。","嗯。"],["走上半小时，心里就没有那么堵了。","这像是一个有效的方式。"]],"category":"comfort_strategies","allowed_categories":["comfort_strategies","preferences"],"content_all_of":[["花园","楼下"],["走"],["堵","舒缓","好"]],"expect":"active","evidence_indexes":[0,1]},
+  {"id":"X03","kind":"communication_boundary","turns":[["请别像哄小孩子那样跟我说话，我想被认真对待。","我会注意表达方式。"]],"category":"boundaries","allowed_categories":["boundaries","comfort_strategies"],"content_all_of":[["小孩子","认真"],["别","不希望","避免","不想"]],"expect":"active"},
+  {"id":"X04","kind":"social_fact","turns":[["我每周三下午都会去社区书画班。","这是很好的安排。"]],"category":"facts","allowed_categories":["facts","events","preferences"],"content_all_of":[["每周三","周三"],["书画","社区"]],"expect":"active"},
+  {"id":"X05","kind":"no_memory_smalltalk","turns":[["今天窗外的云真好看。","是啊。"]],"category":"events","expect":"none"},
+  {"id":"X06","kind":"assistant_induced","turns":[["我午饭吃了面条。","你是不是一直很害怕一个人住？"]],"category":"emotional_triggers","expect":"none"},
+  {"id":"X07","kind":"symptom_denial","turns":[["我这阵子睡得挺踏实，没有再失眠。","听到你睡得好些了。"]],"category":"events","expect":"none"},
+  {"id":"X08","kind":"temporary_health","turns":[["我刚拔完牙，这三天说话会有点疼，到周五应该就好了。","我会放慢一点。"]],"category":"events","allowed_categories":["events","facts"],"content_all_of":[["拔牙"],["三天","周五","疼"]],"expect":"active","require_valid_until":true},
+  {"id":"X09","kind":"temporary_boundary","turns":[["明天下午我要陪老伴复诊，四点前先不要联系我。","好的，我会避开这个时间。"]],"category":"boundaries","allowed_categories":["boundaries","events"],"content_all_of":[["下午","四点"],["联系","复诊"]],"expect":"active","require_valid_until":true},
+  {"id":"X10","kind":"temporary_plan","turns":[["下周二上午我要去做眼科检查，那天别给我安排聊天。","明白。"]],"category":"boundaries","allowed_categories":["boundaries","events"],"content_all_of":[["下周二","周二"],["眼科","检查"],["聊天","安排","别"]],"expect":"active","require_valid_until":true},
+  {"id":"X11","kind":"correction_identity","turns":[["别再叫我刘阿姨了，我姓赵，叫赵阿姨就行。","抱歉，赵阿姨。"]],"category":"facts","allowed_categories":["facts","boundaries","preferences"],"content_all_of":[["赵"]],"expect":"active","existing":"患者姓刘","required_operations":["SUPERSEDE"],"expect_supersede":true},
+  {"id":"X12","kind":"correction_living","turns":[["我去年已经从合肥搬到芜湖了，不住合肥了。","谢谢你纠正我。"]],"category":"facts","allowed_categories":["facts","events"],"content_all_of":[["芜湖"],["搬","住"]],"expect":"active","existing":"目前住在合肥","required_operations":["SUPERSEDE"],"expect_supersede":true},
+  {"id":"X13","kind":"past_event","turns":[["前年夏天我在菜场摔过一跤，后来走路就更小心了。","那次一定吓到你了。"]],"category":"events","allowed_categories":["events","facts"],"content_all_of":[["前年","夏天"],["菜场"],["摔"]],"expect":"active"},
+  {"id":"X14","kind":"medication_routine","turns":[["我的降压药是每天早饭后吃，不能空腹吃。","我记住了。"]],"category":"facts","content_all_of":[["降压药"],["早饭","早餐"],["不能","空腹"]],"expect":"active"},
+  {"id":"X15","kind":"high_sensitivity","turns":[["昨晚我又冒出过伤害自己的念头，不过后来给妹妹打电话了。","谢谢你告诉我，我很重视你的安全。"]],"category":"events","allowed_categories":["events","emotional_triggers"],"content_all_of":[["昨晚"],["伤害自己","自伤"]],"expect":"active"},
+  {"id":"X16","kind":"emotional_trigger","turns":[["只要听见救护车的声音，我就会想起那次住院，胸口发紧。","这种联想很难受。"]],"category":"emotional_triggers","allowed_categories":["emotional_triggers","events"],"content_all_of":[["救护车"],["住院"],["胸口","发紧"]],"expect":"active"},
+  {"id":"X17","kind":"uncertain_future","turns":[["我还不确定要不要参加下个月的合唱团，等女儿有空陪我再决定。","可以等你想清楚。"]],"category":"events","allowed_categories":["events","preferences","facts","boundaries"],"content_all_of":[["不确定","要不要","等"],["下个月"],["合唱团"]],"expect":"active","require_valid_until":true},
+  {"id":"X18","kind":"deduplication","turns":[["我不喜欢房间太暗，晚上最好留一盏小灯。","我记下了。"],["对，夜里有小灯我才安心。","明白。"]],"category":"preferences","allowed_categories":["preferences","comfort_strategies","boundaries"],"content_all_of":[["灯","小灯"],["晚上","夜里"]],"expect":"active","max_matching_items":1},
+  {"id":"X19","kind":"relationship_change","turns":[["我和弟弟以前总拌嘴，这半年倒是常常一起吃饭了。","关系有些变化了。"]],"category":"events","allowed_categories":["events","facts","preferences"],"content_all_of":[["弟弟"],["半年","一起吃饭"]],"expect":"active"},
+  {"id":"X20","kind":"direct_safety_denial","turns":[["你不用担心，我现在没有想伤害自己的打算。","谢谢你明确告诉我。"]],"category":"events","expect":"none"}
+]

@@ -1,476 +1,1185 @@
-"""Measure one complete authenticated voice turn over WebSocket."""
+"""
+Benchmark the project's REAL streaming ASR path.
+
+Actual project path:
+
+    audio chunks
+        ->
+    RealtimeCompanion
+        ->
+    ArkASRStreamingSession
+        ->
+    BigASR streaming WebSocket
+        ->
+    partial / final ASR results
+
+IMPORTANT:
+This benchmark intentionally does NOT use `manual_audio`.
+`manual_audio` is a complete-audio upload path and is not the
+project's realtime streaming ASR path.
+
+The benchmark reuses the exact ArkASRStreamingSession implementation
+used by RealtimeCompanion.
+
+Default streaming chunk size:
+    200 ms
+
+This matches:
+    RealtimeCompanionConfig.asr_chunk_s = 0.2
+"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import base64
 import json
 import math
 import time
-import uuid
 import wave
-from array import array
 from pathlib import Path
-from urllib.parse import urlsplit
 from typing import Any
 
 
+SAMPLE_RATE = 16000
+
+# Project default:
+# RealtimeCompanionConfig.asr_chunk_s = 0.2
+DEFAULT_CHUNK_MS = 200
+
+
+# ============================================================
+# Metrics
+# ============================================================
+
 _METRICS = (
-    "session_start_ms",
-    "input_to_vad_end_ms",
-    "input_to_asr_result_ms",
-    "input_to_first_ai_text_ms",
-    "input_to_tts_start_ms",
-    "input_to_first_tts_byte_ms",
-    "input_to_tts_end_ms",
-    "asr_to_first_ai_text_ms",
-    "asr_to_first_tts_byte_ms",
+    "stream_start_ms",
+    "first_partial_ms",
+    "first_final_ms",
+    "finish_to_final_ms",
+    "stream_wall_ms",
+    "rtf",
 )
 
 
+# ============================================================
+# Utilities
+# ============================================================
+
 def _positive_int(value: str) -> int:
     number = int(value)
+
     if number < 1:
-        raise argparse.ArgumentTypeError("must be greater than zero")
+        raise argparse.ArgumentTypeError(
+            "must be greater than zero"
+        )
+
     return number
 
 
 def _summary(values: list[float]) -> dict[str, float | int]:
     ordered = sorted(values)
+
     if not ordered:
-        return {"count": 0}
+        return {
+            "count": 0,
+        }
+
     def percentile(ratio: float) -> float:
-        return ordered[min(len(ordered) - 1, math.ceil(len(ordered) * ratio) - 1)]
+        return ordered[
+            min(
+                len(ordered) - 1,
+                math.ceil(len(ordered) * ratio) - 1,
+            )
+        ]
+
     return {
         "count": len(ordered),
-        "mean_ms": round(sum(ordered) / len(ordered), 2),
-        "p50_ms": round(percentile(0.50), 2),
-        "p95_ms": round(percentile(0.95), 2),
-        "max_ms": round(ordered[-1], 2),
+        "mean_ms": round(
+            sum(ordered) / len(ordered),
+            2,
+        ),
+        "p50_ms": round(
+            percentile(0.50),
+            2,
+        ),
+        "p95_ms": round(
+            percentile(0.95),
+            2,
+        ),
+        "max_ms": round(
+            ordered[-1],
+            2,
+        ),
     }
 
 
-def _read_pcm16(path: str | Path) -> bytes:
-    with wave.open(str(path), "rb") as source:
+def _summary_rtf(values: list[float]) -> dict[str, float | int]:
+    ordered = sorted(values)
+
+    if not ordered:
+        return {
+            "count": 0,
+        }
+
+    def percentile(ratio: float) -> float:
+        return ordered[
+            min(
+                len(ordered) - 1,
+                math.ceil(len(ordered) * ratio) - 1,
+            )
+        ]
+
+    return {
+        "count": len(ordered),
+        "mean": round(
+            sum(ordered) / len(ordered),
+            4,
+        ),
+        "p50": round(
+            percentile(0.50),
+            4,
+        ),
+        "p95": round(
+            percentile(0.95),
+            4,
+        ),
+        "max": round(
+            ordered[-1],
+            4,
+        ),
+    }
+
+
+def _read_pcm16(
+    path: str | Path,
+) -> bytes:
+
+    with wave.open(
+        str(path),
+        "rb",
+    ) as source:
+
         params = source.getparams()
+
         if (
             params.nchannels,
             params.sampwidth,
             params.framerate,
             params.comptype,
-        ) != (1, 2, 16000, "NONE"):
+        ) != (
+            1,
+            2,
+            SAMPLE_RATE,
+            "NONE",
+        ):
             raise ValueError(
                 "audio must be mono, PCM16, 16000 Hz WAV; "
-                f"got channels={params.nchannels}, width={params.sampwidth}, "
-                f"rate={params.framerate}, compression={params.comptype}"
+                f"got channels={params.nchannels}, "
+                f"width={params.sampwidth}, "
+                f"rate={params.framerate}, "
+                f"compression={params.comptype}"
             )
-        data = source.readframes(params.nframes)
+
+        data = source.readframes(
+            params.nframes
+        )
+
     if not data:
-        raise ValueError("audio file is empty")
+        raise ValueError(
+            "audio file is empty"
+        )
+
     return data
 
 
-def _websocket_url(server: str) -> str:
-    parsed = urlsplit(server.rstrip("/"))
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("server must be an http(s) URL")
-    scheme = "wss" if parsed.scheme == "https" else "ws"
-    return f"{scheme}://{parsed.netloc}/ws"
+def _audio_duration_ms(
+    pcm16: bytes,
+) -> float:
+
+    sample_count = len(pcm16) // 2
+
+    return (
+        sample_count
+        / SAMPLE_RATE
+        * 1000.0
+    )
 
 
-def _connect_ws(websocket_url: str, cookie: str):
-    import websockets
+def _split_pcm16(
+    pcm16: bytes,
+    chunk_ms: int,
+) -> list[bytes]:
 
-    headers = {"Cookie": cookie}
-    try:
-        return websockets.connect(
-            websocket_url,
-            additional_headers=headers,
-            proxy=None,
-            open_timeout=10,
+    samples_per_chunk = int(
+        SAMPLE_RATE
+        * chunk_ms
+        / 1000
+    )
+
+    if samples_per_chunk <= 0:
+        raise ValueError(
+            "chunk_ms must produce at least one sample"
         )
-    except TypeError:
-        return websockets.connect(
-            websocket_url,
-            extra_headers=headers,
-            open_timeout=10,
+
+    bytes_per_chunk = (
+        samples_per_chunk * 2
+    )
+
+    return [
+        pcm16[offset : offset + bytes_per_chunk]
+        for offset in range(
+            0,
+            len(pcm16),
+            bytes_per_chunk,
         )
+    ]
 
 
-async def _recv_json(websocket, deadline: float) -> dict[str, Any]:
-    while True:
-        remaining = deadline - time.perf_counter()
-        if remaining <= 0:
-            raise TimeoutError("WebSocket event timeout")
-        raw = await asyncio.wait_for(websocket.recv(), remaining)
-        if isinstance(raw, bytes):
-            continue
-        try:
-            event = json.loads(raw)
-        except (TypeError, json.JSONDecodeError):
-            continue
-        if isinstance(event, dict):
-            return event
-
-
-async def _wait_for_type(websocket, event_type: str, timeout_s: float) -> dict[str, Any]:
-    deadline = time.perf_counter() + timeout_s
-    while True:
-        event = await _recv_json(websocket, deadline)
-        if event.get("type") == event_type:
-            return event
-
-
-async def _prepare_session(
-    websocket,
-    *,
-    patient_id: str | None,
-    new_patient: bool,
-    profile_name: str,
-    long_term_memory_enabled: bool,
-    timeout_s: float,
-) -> tuple[str | None, float]:
-    await _wait_for_type(websocket, "waiting_for_info", timeout_s)
-    payload: dict[str, Any] = {
-        "type": "start_session",
-        "force_new_session": True,
-        "long_term_memory_enabled": long_term_memory_enabled,
-    }
-    if patient_id:
-        payload["patient_id"] = patient_id
-    if new_patient:
-        payload["profile"] = {
-            "name": profile_name,
-            "age": 70,
-            "gender": "female",
-            "education_years": 6,
-        }
-    started_at = time.perf_counter()
-    await websocket.send(json.dumps(payload, ensure_ascii=False))
-
-    deadline = time.perf_counter() + timeout_s
-    started = False
-    resolved_patient_id = patient_id
-    session_started_at = 0.0
-    greeting_expected = new_patient
-    greeting_finished = not greeting_expected
-    while not started or not greeting_finished:
-        event = await _recv_json(websocket, deadline)
-        event_type = event.get("type")
-        if event_type == "patient_memory":
-            resolved_patient_id = str(event.get("patient_id") or "") or resolved_patient_id
-        elif event_type == "session_started":
-            started = True
-            session_started_at = time.perf_counter()
-        elif greeting_expected and event_type == "tts_end":
-            greeting_finished = True
-    return resolved_patient_id, (session_started_at - started_at) * 1000
-
+# ============================================================
+# Streaming ASR benchmark
+# ============================================================
 
 async def _run_once(
     *,
-    websocket_url: str,
-    cookie: str,
     pcm16: bytes,
+    chunk_ms: int,
+    realtime: bool,
     timeout_s: float,
-    patient_id: str | None,
-    new_patient: bool,
-    profile_name: str,
-    long_term_memory_enabled: bool,
-    audio_output: Path | None,
 ) -> dict[str, Any]:
-    async with _connect_ws(websocket_url, cookie) as websocket:
-        resolved_patient_id, session_start_ms = await _prepare_session(
-            websocket,
-            patient_id=patient_id,
-            new_patient=new_patient,
-            profile_name=profile_name,
-            long_term_memory_enabled=long_term_memory_enabled,
-            timeout_s=timeout_s,
-        )
-        started_at = time.perf_counter()
-        await websocket.send(
-            json.dumps(
-                {
-                    "type": "manual_audio",
-                    "audio": base64.b64encode(pcm16).decode("ascii"),
-                    "sample_rate": 16000,
-                }
-            )
-        )
-        deadline = started_at + timeout_s
-        marks: dict[str, float] = {}
-        turn_id = ""
-        final_insight = None
-        ai_text = ""
-        tts_audio = bytearray()
-        while "input_to_tts_end" not in marks or final_insight is None:
-            event = await _recv_json(websocket, deadline)
-            now = time.perf_counter()
-            event_type = event.get("type")
-            if event_type == "turn_insight" and event.get("state") == "final":
-                final_insight = event
-                continue
-            if event_type == "vad_end":
-                marks.setdefault("input_to_vad_end", now)
-                continue
-            if event_type == "asr_error":
-                raise RuntimeError(str(event.get("detail") or "ASR failed"))
-            if event_type == "asr_result":
-                turn_id = str(event.get("turn_id") or "")
-                if turn_id:
-                    marks.setdefault("input_to_asr_result", now)
-                continue
-            if not turn_id or str(event.get("turn_id") or "") != turn_id:
-                continue
-            if event_type == "ai_response_chunk":
-                if event.get("is_first") or int(event.get("sentence_index") or 0) == 1:
-                    marks.setdefault("input_to_first_ai_text", now)
-                ai_text += str(event.get("text") or "")
-            elif event_type == "ai_response":
-                if event.get("error"):
-                    raise RuntimeError(
-                        str(event.get("text") or "AI response failed")
-                    )
-                marks.setdefault("input_to_first_ai_text", now)
-                if not ai_text:
-                    ai_text = str(event.get("text") or "")
-            elif event_type == "tts_start":
-                marks.setdefault("input_to_tts_start", now)
-            elif event_type in {"tts_chunk", "tts_audio"}:
-                marks.setdefault("input_to_first_tts_byte", now)
-                chunk = event.get("chunk") or event.get("audio") or event.get("data")
-                if chunk:
-                    tts_audio.extend(base64.b64decode(chunk))
-            elif event_type == "tts_end":
-                marks.setdefault("input_to_tts_end", now)
 
-    if audio_output and tts_audio:
-        samples = array("f")
-        samples.frombytes(tts_audio)
-        pcm16 = array(
-            "h",
-            (round(max(-1.0, min(1.0, sample)) * 32767) for sample in samples),
+    # Import the project's REAL implementation.
+    #
+    # This is the same class used by:
+    #
+    # RealtimeCompanion
+    #     ->
+    # ArkASRStreamingSession
+    #
+    from src.tools.voice.ark_asr import (
+        ArkASRError,
+        ArkASRStreamingSession,
+        ark_asr_streaming_supported,
+    )
+
+    # --------------------------------------------------------
+    # Verify actual project streaming mode
+    # --------------------------------------------------------
+
+    if not ark_asr_streaming_supported():
+        raise RuntimeError(
+            "Project streaming ASR is not enabled. "
+            "ARK_ASR_MODE must be 'bigmodel' or 'bigmodel_async'."
         )
-        audio_output.parent.mkdir(parents=True, exist_ok=True)
-        with wave.open(str(audio_output), "wb") as target:
-            target.setnchannels(1)
-            target.setsampwidth(2)
-            target.setframerate(24000)
-            target.writeframes(pcm16.tobytes())
-    record = {
-        "patient_id": resolved_patient_id,
-        "turn_id": turn_id,
-        "session_start_ms": round(session_start_ms, 2),
-        "emotion": final_insight.get("emotion", {}),
-        "ai_text": ai_text,
-        "tts_audio": str(audio_output) if audio_output and tts_audio else None,
-        **{
-            metric: round((marks[key] - started_at) * 1000, 2)
-            for metric, key in (
-                ("input_to_vad_end_ms", "input_to_vad_end"),
-                ("input_to_asr_result_ms", "input_to_asr_result"),
-                ("input_to_first_ai_text_ms", "input_to_first_ai_text"),
-                ("input_to_tts_start_ms", "input_to_tts_start"),
-                ("input_to_first_tts_byte_ms", "input_to_first_tts_byte"),
-                ("input_to_tts_end_ms", "input_to_tts_end"),
+
+    # --------------------------------------------------------
+    # Prepare chunks
+    # --------------------------------------------------------
+
+    chunks = _split_pcm16(
+        pcm16,
+        chunk_ms,
+    )
+
+    audio_duration_ms = _audio_duration_ms(
+        pcm16
+    )
+
+    # --------------------------------------------------------
+    # Timing state
+    # --------------------------------------------------------
+
+    marks: dict[str, float] = {}
+
+    partial_texts: list[str] = []
+
+    final_text = ""
+
+    partial_count = 0
+
+    final_count = 0
+
+    first_feed_at = 0.0
+
+    last_feed_end_at = 0.0
+
+    final_received = asyncio.Event()
+
+    callback_error: Exception | None = None
+
+    # --------------------------------------------------------
+    # Result callback
+    #
+    # This is exactly the callback used by
+    # RealtimeCompanion._on_result().
+    # --------------------------------------------------------
+
+    async def on_result(
+        text: str,
+        is_final: bool,
+    ) -> None:
+
+        nonlocal \
+            partial_count, \
+            final_count, \
+            final_text, \
+            callback_error
+
+        now = time.perf_counter()
+
+        text = str(text or "").strip()
+
+        if not text:
+            return
+
+        try:
+
+            if is_final:
+
+                final_count += 1
+
+                final_text = text
+
+                marks.setdefault(
+                    "first_final",
+                    now,
+                )
+
+                final_received.set()
+
+            else:
+
+                partial_count += 1
+
+                partial_texts.append(
+                    text
+                )
+
+                marks.setdefault(
+                    "first_partial",
+                    now,
+                )
+
+        except Exception as exc:
+
+            callback_error = exc
+
+            final_received.set()
+
+    # --------------------------------------------------------
+    # Create EXACT project streaming session
+    # --------------------------------------------------------
+
+    stream = ArkASRStreamingSession(
+        on_result=on_result
+    )
+
+    stream_start_at = time.perf_counter()
+
+    try:
+
+        # ----------------------------------------------------
+        # BigASR streaming WebSocket start
+        # ----------------------------------------------------
+
+        await stream.start()
+
+        stream_started_at = time.perf_counter()
+
+        marks[
+            "stream_start"
+        ] = stream_started_at
+
+        # ----------------------------------------------------
+        # Feed realtime audio chunks
+        # ----------------------------------------------------
+
+        for index, chunk in enumerate(chunks):
+
+            if not chunk:
+                continue
+
+            # Convert bytes to the same numeric representation
+            # expected by RealtimeCompanion.
+            #
+            # RealtimeCompanion feeds numpy audio arrays.
+            import numpy as np
+
+            audio = np.frombuffer(
+                chunk,
+                dtype=np.int16,
+            ).astype(
+                np.float32
             )
-            if key in marks
-        },
+
+            # Project's realtime path works with normalized
+            # float audio.
+            audio /= 32768.0
+
+            if first_feed_at == 0.0:
+
+                first_feed_at = (
+                    time.perf_counter()
+                )
+
+                marks[
+                    "first_feed"
+                ] = first_feed_at
+
+            # ------------------------------------------------
+            # Actual streaming ASR call
+            # ------------------------------------------------
+
+            await stream.feed(
+                audio
+            )
+
+            last_feed_end_at = (
+                time.perf_counter()
+            )
+
+            # ------------------------------------------------
+            # IMPORTANT:
+            #
+            # In real usage audio arrives in realtime.
+            #
+            # If we send all chunks immediately, we measure
+            # upload/engine throughput rather than realtime
+            # ASR responsiveness.
+            # ------------------------------------------------
+
+            if realtime:
+
+                expected_elapsed = (
+                    (index + 1)
+                    * chunk_ms
+                    / 1000.0
+                )
+
+                actual_elapsed = (
+                    time.perf_counter()
+                    - first_feed_at
+                )
+
+                remaining = (
+                    expected_elapsed
+                    - actual_elapsed
+                )
+
+                if remaining > 0:
+
+                    await asyncio.sleep(
+                        remaining
+                    )
+
+        # ----------------------------------------------------
+        # All audio has been sent.
+        #
+        # This is important:
+        #
+        # finish() is the actual finalization of the
+        # VAD-delimited utterance on the BigASR stream.
+        # ----------------------------------------------------
+
+        finish_started_at = (
+            time.perf_counter()
+        )
+
+        marks[
+            "finish_start"
+        ] = finish_started_at
+
+        # Give the ASR stream a little time to return its
+        # final result.
+        try:
+
+            await asyncio.wait_for(
+                stream.finish(),
+                timeout=timeout_s,
+            )
+
+        except asyncio.TimeoutError:
+
+            raise TimeoutError(
+                "stream.finish() timed out"
+            )
+
+        # ----------------------------------------------------
+        # The callback normally receives final result during
+        # finish(). Give the callback a short scheduling window.
+        # ----------------------------------------------------
+
+        try:
+
+            await asyncio.wait_for(
+                final_received.wait(),
+                timeout=min(
+                    5.0,
+                    timeout_s,
+                ),
+            )
+
+        except asyncio.TimeoutError:
+
+            # Some implementations return the final text
+            # directly from finish() without calling the
+            # callback in the expected order.
+            pass
+
+        finished_at = time.perf_counter()
+
+        marks[
+            "finished"
+        ] = finished_at
+
+        if callback_error:
+
+            raise callback_error
+
+    except ArkASRError:
+
+        raise
+
+    finally:
+
+        try:
+
+            await stream.aclose()
+
+        except Exception:
+
+            pass
+
+    # --------------------------------------------------------
+    # Build metrics
+    # --------------------------------------------------------
+
+    record: dict[str, Any] = {
+
+        "audio_duration_ms":
+            round(
+                audio_duration_ms,
+                2,
+            ),
+
+        "chunk_ms":
+            chunk_ms,
+
+        "chunk_count":
+            len(chunks),
+
+        "partial_count":
+            partial_count,
+
+        "final_count":
+            final_count,
+
+        "partial_texts":
+            partial_texts,
+
+        "final_text":
+            final_text,
+
+        "realtime":
+            realtime,
     }
-    if "input_to_asr_result_ms" in record:
-        for target, source in (
-            ("asr_to_first_ai_text_ms", "input_to_first_ai_text_ms"),
-            ("asr_to_first_tts_byte_ms", "input_to_first_tts_byte_ms"),
-        ):
-            if source in record:
-                record[target] = round(record[source] - record["input_to_asr_result_ms"], 2)
+
+    # --------------------------------------------------------
+    # Stream startup
+    # --------------------------------------------------------
+
+    if "stream_start" in marks:
+
+        record[
+            "stream_start_ms"
+        ] = round(
+            (
+                marks[
+                    "stream_start"
+                ]
+                - stream_start_at
+            )
+            * 1000,
+            2,
+        )
+
+    # --------------------------------------------------------
+    # First partial
+    #
+    # First audio chunk -> first non-final result
+    # --------------------------------------------------------
+
+    if (
+        "first_feed" in marks
+        and "first_partial" in marks
+    ):
+
+        record[
+            "first_partial_ms"
+        ] = round(
+            (
+                marks[
+                    "first_partial"
+                ]
+                - marks[
+                    "first_feed"
+                ]
+            )
+            * 1000,
+            2,
+        )
+
+    # --------------------------------------------------------
+    # First final
+    #
+    # First audio chunk -> first final result
+    # --------------------------------------------------------
+
+    if (
+        "first_feed" in marks
+        and "first_final" in marks
+    ):
+
+        record[
+            "first_final_ms"
+        ] = round(
+            (
+                marks[
+                    "first_final"
+                ]
+                - marks[
+                    "first_feed"
+                ]
+            )
+            * 1000,
+            2,
+        )
+
+    # --------------------------------------------------------
+    # Finalization latency
+    #
+    # Last audio chunk -> final result
+    # --------------------------------------------------------
+
+    if (
+        "finish_start" in marks
+        and "first_final" in marks
+    ):
+
+        record[
+            "finish_to_final_ms"
+        ] = round(
+            (
+                marks[
+                    "first_final"
+                ]
+                - marks[
+                    "finish_start"
+                ]
+            )
+            * 1000,
+            2,
+        )
+
+    # --------------------------------------------------------
+    # Overall realtime streaming wall time
+    #
+    # First audio chunk -> final result
+    # --------------------------------------------------------
+
+    if (
+        "first_feed" in marks
+        and "first_final" in marks
+    ):
+
+        wall_ms = (
+            marks[
+                "first_final"
+            ]
+            - marks[
+                "first_feed"
+            ]
+        ) * 1000
+
+        record[
+            "stream_wall_ms"
+        ] = round(
+            wall_ms,
+            2,
+        )
+
+        record[
+            "rtf"
+        ] = round(
+            wall_ms
+            / max(
+                audio_duration_ms,
+                1e-6,
+            ),
+            4,
+        )
+
+    # --------------------------------------------------------
+    # Additional useful metrics
+    # --------------------------------------------------------
+
+    if (
+        "first_feed" in marks
+        and "stream_start" in marks
+    ):
+
+        record[
+            "stream_start_from_feed_ms"
+        ] = round(
+            (
+                marks[
+                    "first_feed"
+                ]
+                - stream_start_at
+            )
+            * 1000,
+            2,
+        )
+
+    if (
+        "first_partial" in marks
+        and "first_final" in marks
+    ):
+
+        record[
+            "partial_to_final_ms"
+        ] = round(
+            (
+                marks[
+                    "first_final"
+                ]
+                - marks[
+                    "first_partial"
+                ]
+            )
+            * 1000,
+            2,
+        )
+
     return record
 
 
-def _login(server: str, username: str, password: str) -> str:
-    import requests
+# ============================================================
+# Benchmark loop
+# ============================================================
 
-    client = requests.Session()
-    client.trust_env = False
-    response = client.post(
-        f"{server.rstrip('/')}/api/auth/login",
-        json={"username": username, "password": password},
-        timeout=10,
+async def _run_benchmark(
+    args,
+    pcm16: bytes,
+) -> dict[str, Any]:
+
+    records: list[dict[str, Any]] = []
+
+    failures: list[dict[str, Any]] = []
+
+    total_runs = (
+        args.warmup_runs
+        + args.runs
     )
-    response.raise_for_status()
-    payload = response.json()
-    if not payload.get("success"):
-        raise RuntimeError("login failed")
-    cookie = client.cookies.get("aa_session")
-    if not cookie:
-        raise RuntimeError("login response did not set aa_session")
-    return f"aa_session={cookie}"
 
+    for index in range(
+        total_runs
+    ):
 
-def _server_flags(server: str) -> dict[str, Any]:
-    import requests
+        phase = (
+            "warmup"
+            if index < args.warmup_runs
+            else "measured"
+        )
 
-    response = requests.get(f"{server.rstrip('/')}/health", timeout=10)
-    response.raise_for_status()
-    return dict(response.json().get("release_flags") or {})
+        logical_run = (
+            index + 1
+            if phase == "warmup"
+            else (
+                index
+                - args.warmup_runs
+                + 1
+            )
+        )
 
+        record = None
 
-async def _run_benchmark(args, pcm16: bytes, cookie: str) -> dict[str, Any]:
-    records = []
-    failures = []
-    websocket_url = _websocket_url(args.server)
-    total_runs = args.warmup_runs + args.runs
-    for index in range(total_runs):
-        phase = "warmup" if index < args.warmup_runs else "measured"
-        logical_run = index + 1 if phase == "warmup" else index - args.warmup_runs + 1
-        for attempt in range(1, args.max_attempts_per_run + 1):
+        for attempt in range(
+            1,
+            args.max_attempts_per_run + 1,
+        ):
+
             try:
+
                 record = await _run_once(
-                    websocket_url=websocket_url,
-                    cookie=cookie,
                     pcm16=pcm16,
+                    chunk_ms=args.chunk_ms,
+                    realtime=args.realtime,
                     timeout_s=args.timeout,
-                    patient_id=args.patient_id,
-                    new_patient=args.new_patient,
-                    profile_name=f"{args.profile_name}-{index + 1:03d}-{uuid.uuid4().hex[:6]}",
-                    long_term_memory_enabled=args.long_term_memory == "on",
-                    audio_output=(
-                        args.audio_output_dir / f"{args.long_term_memory}-{phase}-{logical_run}.wav"
-                        if args.audio_output_dir else None
-                    ),
                 )
-                emotion = record.get("emotion", {})
-                if args.require_audio_emotion and (
-                    emotion.get("source") != "emotion2vec_audio+text"
-                    or not emotion.get("audio_model_used")
-                ):
-                    raise RuntimeError("audio emotion verification failed")
+
                 break
+
             except Exception as exc:
-                failures.append({
+
+                failure = {
                     "phase": phase,
                     "logical_run": logical_run,
                     "attempt": attempt,
-                    "error_type": type(exc).__name__,
+                    "error_type": type(
+                        exc
+                    ).__name__,
                     "detail": str(exc),
-                })
-                if attempt == args.max_attempts_per_run:
-                    raise
-                await asyncio.sleep(args.retry_delay)
-        if index >= args.warmup_runs:
-            records.append(record)
-    summary = {
-        metric: _summary(
-            [float(record[metric]) for record in records if metric in record]
-        )
-        for metric in _METRICS
-    }
-    return {"runs": records, "failures": failures, "summary": summary}
+                }
 
+                failures.append(
+                    failure
+                )
+
+                print(
+                    f"[{phase} run {logical_run}] "
+                    f"attempt {attempt} failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+                if (
+                    attempt
+                    == args.max_attempts_per_run
+                ):
+
+                    record = None
+
+                    break
+
+                await asyncio.sleep(
+                    args.retry_delay
+                )
+
+        if (
+            index >= args.warmup_runs
+            and record is not None
+        ):
+
+            record[
+                "run"
+            ] = logical_run
+
+            records.append(
+                record
+            )
+
+    # --------------------------------------------------------
+    # Summary
+    # --------------------------------------------------------
+
+    summary: dict[str, Any] = {}
+
+    for metric in _METRICS:
+
+        values = [
+            float(
+                record[metric]
+            )
+            for record in records
+            if metric in record
+        ]
+
+        if metric == "rtf":
+
+            summary[
+                metric
+            ] = _summary_rtf(
+                values
+            )
+
+        else:
+
+            summary[
+                metric
+            ] = _summary(
+                values
+            )
+
+    summary[
+        "partial_count"
+    ] = _summary(
+        [
+            float(
+                record[
+                    "partial_count"
+                ]
+            )
+            for record in records
+            if "partial_count" in record
+        ]
+    )
+
+    summary[
+        "chunk_count"
+    ] = _summary(
+        [
+            float(
+                record[
+                    "chunk_count"
+                ]
+            )
+            for record in records
+            if "chunk_count" in record
+        ]
+    )
+
+    return {
+        "runs": records,
+        "failures": failures,
+        "summary": summary,
+    }
+
+
+# ============================================================
+# CLI
+# ============================================================
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Authenticated voice WebSocket latency benchmark")
-    parser.add_argument("--live", action="store_true", help="perform network calls")
-    parser.add_argument("--server", default="http://127.0.0.1:8502")
-    parser.add_argument("--audio", type=Path, required=True)
-    parser.add_argument("--username", required=True)
-    parser.add_argument("--password", required=True)
-    patient = parser.add_mutually_exclusive_group(required=True)
-    patient.add_argument("--patient-id")
-    patient.add_argument(
-        "--new-patient",
-        action="store_true",
-        help="create synthetic patients; this writes benchmark data to the server DB",
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Benchmark the project's real "
+            "ArkASR streaming path"
+        )
     )
-    parser.add_argument("--profile-name", default="voice-benchmark")
-    parser.add_argument("--long-term-memory", choices=("on", "off"), default="on")
-    parser.add_argument("--audio-output-dir", type=Path)
-    parser.add_argument("--runs", type=_positive_int, default=1)
-    parser.add_argument("--warmup-runs", type=int, default=0)
-    parser.add_argument("--timeout", type=float, default=45.0)
-    parser.add_argument("--max-attempts-per-run", type=_positive_int, default=1)
-    parser.add_argument("--retry-delay", type=float, default=1.0)
+
     parser.add_argument(
-        "--expect-long-term-memory",
-        choices=("on", "off"),
-        help="fail if the server long-term-memory flag does not match",
+        "--audio",
+        type=Path,
+        required=True,
     )
+
     parser.add_argument(
-        "--expect-long-term-memory-writes",
-        choices=("on", "off"),
-        help="fail if the server long-term-memory write flag does not match",
+        "--chunk-ms",
+        type=_positive_int,
+        default=DEFAULT_CHUNK_MS,
+        help=(
+            "streaming audio chunk size in ms; "
+            "project default is 200 ms"
+        ),
     )
+
     parser.add_argument(
-        "--require-audio-emotion",
-        action="store_true",
-        help="fail unless every run completes Emotion2Vec audio inference",
+        "--realtime",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "pace audio in realtime; "
+            "disable only for throughput testing"
+        ),
     )
-    parser.add_argument("--output", type=Path)
+
+    parser.add_argument(
+        "--runs",
+        type=_positive_int,
+        default=10,
+    )
+
+    parser.add_argument(
+        "--warmup-runs",
+        type=int,
+        default=1,
+    )
+
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=30.0,
+    )
+
+    parser.add_argument(
+        "--max-attempts-per-run",
+        type=_positive_int,
+        default=1,
+    )
+
+    parser.add_argument(
+        "--retry-delay",
+        type=float,
+        default=1.0,
+    )
+
+    parser.add_argument(
+        "--output",
+        type=Path,
+    )
+
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+# ============================================================
+# Main
+# ============================================================
+
+def main(
+    argv: list[str] | None = None,
+) -> int:
+
+    args = _parser().parse_args(
+        argv
+    )
+
     if args.warmup_runs < 0:
-        _parser().error("--warmup-runs must be zero or greater")
+
+        _parser().error(
+            "--warmup-runs must be "
+            "zero or greater"
+        )
+
     if args.retry_delay < 0:
-        _parser().error("--retry-delay must be zero or greater")
+
+        _parser().error(
+            "--retry-delay must be "
+            "zero or greater"
+        )
+
+    # --------------------------------------------------------
+    # Read audio
+    # --------------------------------------------------------
+
+    pcm16 = _read_pcm16(
+        args.audio
+    )
+
+    # --------------------------------------------------------
+    # Record configuration
+    # --------------------------------------------------------
+
     requested = {
-        "server": args.server,
-        "audio": str(args.audio),
+        "audio": str(
+            args.audio
+        ),
+        "chunk_ms": args.chunk_ms,
+        "realtime": args.realtime,
         "runs": args.runs,
         "warmup_runs": args.warmup_runs,
-        "max_attempts_per_run": args.max_attempts_per_run,
-        "retry_delay": args.retry_delay,
-        "patient_id": args.patient_id,
-        "new_patient": args.new_patient,
-        "expect_long_term_memory": args.expect_long_term_memory,
-        "expect_long_term_memory_writes": args.expect_long_term_memory_writes,
-        "require_audio_emotion": args.require_audio_emotion,
-        "long_term_memory": args.long_term_memory,
+        "timeout": args.timeout,
+        "max_attempts_per_run":
+            args.max_attempts_per_run,
+        "retry_delay":
+            args.retry_delay,
+        "audio_duration_ms":
+            round(
+                _audio_duration_ms(
+                    pcm16
+                ),
+                2,
+            ),
     }
-    if not args.live:
-        print(json.dumps({"live": False, "requested": requested}, ensure_ascii=False))
-        return 0
-    pcm16 = _read_pcm16(args.audio)
-    server_flags = _server_flags(args.server)
-    if not server_flags.get("turn_insight"):
-        raise RuntimeError("server must enable ENABLE_TURN_INSIGHT for emotion verification")
-    expected_memory = args.expect_long_term_memory
-    if expected_memory and bool(server_flags.get("long_term_memory")) != (expected_memory == "on"):
-        raise RuntimeError(
-            "server long-term-memory state does not match "
-            f"--expect-long-term-memory={expected_memory}"
+
+    # --------------------------------------------------------
+    # Run
+    # --------------------------------------------------------
+
+    result = asyncio.run(
+        _run_benchmark(
+            args,
+            pcm16,
         )
-    expected_writes = args.expect_long_term_memory_writes
-    if expected_writes and bool(server_flags.get("long_term_memory_writes")) != (expected_writes == "on"):
-        raise RuntimeError(
-            "server long-term-memory write state does not match "
-            f"--expect-long-term-memory-writes={expected_writes}"
-        )
-    cookie = _login(args.server, args.username, args.password)
-    result = {"live": True, "requested": requested, "server_flags": server_flags}
-    result.update(asyncio.run(_run_benchmark(args, pcm16, cookie)))
-    if args.require_audio_emotion:
-        invalid = [
-            record.get("turn_id") or "unknown"
-            for record in result["runs"]
-            if record.get("emotion", {}).get("source") != "emotion2vec_audio+text"
-            or not record.get("emotion", {}).get("audio_model_used")
-        ]
-        if invalid:
-            raise RuntimeError(
-                "audio emotion verification failed for turns: " + ", ".join(invalid)
-            )
-    encoded = json.dumps(result, ensure_ascii=False, indent=2)
+    )
+
+    output = {
+
+        "benchmark":
+            "real_streaming_asr",
+
+        "requested":
+            requested,
+
+        "actual_path":
+            (
+                "audio chunks -> "
+                "ArkASRStreamingSession -> "
+                "BigASR streaming WebSocket -> "
+                "partial/final callbacks"
+            ),
+
+        "metric_definitions": {
+
+            "stream_start_ms":
+                "ArkASRStreamingSession.start() duration",
+
+            "first_partial_ms":
+                "first audio chunk -> first non-final ASR result",
+
+            "first_final_ms":
+                "first audio chunk -> first final ASR result",
+
+            "finish_to_final_ms":
+                "finish() start -> first final ASR result",
+
+            "stream_wall_ms":
+                "first audio chunk -> first final ASR result",
+
+            "rtf":
+                "stream_wall_ms / audio_duration_ms",
+
+            "partial_count":
+                "number of non-final ASR results",
+
+            "chunk_count":
+                "number of audio chunks fed into the streaming ASR",
+        },
+
+        "notes": [
+            (
+                "This benchmark intentionally does not use "
+                "manual_audio."
+            ),
+            (
+                "The project RealtimeCompanion uses "
+                "asr_chunk_s=0.2, therefore the default "
+                "benchmark chunk size is 200 ms."
+            ),
+            (
+                "realtime=true is required for user-facing "
+                "streaming latency. Sending all chunks "
+                "immediately measures throughput rather "
+                "than live responsiveness."
+            ),
+            (
+                "first_partial_ms measures streaming ASR "
+                "responsiveness while audio is still being "
+                "fed."
+            ),
+            (
+                "first_final_ms measures complete recognition "
+                "latency from the beginning of the streamed "
+                "utterance."
+            ),
+        ],
+
+        **result,
+    }
+
+    encoded = json.dumps(
+        output,
+        ensure_ascii=False,
+        indent=2,
+    )
+
     if args.output:
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(encoded + "\n", encoding="utf-8")
+
+        args.output.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        args.output.write_text(
+            encoded + "\n",
+            encoding="utf-8",
+        )
+
     print(encoded)
+
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(
+        main()
+    )
