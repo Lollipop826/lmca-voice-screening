@@ -4,6 +4,7 @@
 
 > 这是一个**代码仓库**，不包含真实密钥、患者数据、录音、运行日志、私有证书或大模型权重。请先阅读本文的「安全与发布边界」再发布或部署。
 
+
 ## 功能概览
 
 - FastAPI 服务，默认端口为 `8502`；提供浏览器界面、WebRTC 与兼容 WebSocket 接入。
@@ -113,31 +114,6 @@ python -m pytest -q tests/voice
 python -m pytest -q tests/web
 python -m pytest -q tests/integrations
 ```
-
-## 发布到 GitHub
-
-已配置的 GitHub 远程仓库为 `github`。没有安装 GitHub CLI 时，可以直接使用 Git 的 HTTPS 凭据提示。先在 GitHub 网页创建一个只允许访问本仓库的 fine-grained personal access token：选择仓库 `Kong0426/lmca-share`，只授予 Repository permissions → Contents → Read and write。令牌只显示一次，不要写入文件或发到聊天中。
-
-在终端中执行：
-
-```bash
-cd /data/luyang/lmca-share
-
-# 仅在本仓库内存中暂存凭据，默认约 15 分钟后失效
-git config --local credential.helper 'cache --timeout=900'
-
-# 只添加已经检查过的文件；不要直接 git add .
-git add README.md .gitignore
-# 按审查结果逐个添加（下面只是示例，不要盲目复制）
-# git add src/voice/application.py tests/voice/test_voice_runtime.py
-git status --short
-# 忽略已审查的第三方静态构建文件中的格式提示
-git diff --cached --check -- . ':(exclude)static/vendor'
-git commit -m "feat: publish completed project"
-git push github main
-```
-
-`git push` 第一次询问时，Username 填你的 GitHub 用户名，Password 粘贴刚创建的 token（不是 GitHub 登录密码）。如果你安装了 GitHub CLI，也可以使用 `gh auth login` 和 `gh auth setup-git` 完成同样的登录流程。无论采用哪种方式，都不要使用不经检查的 `git add .`；其他文件必须先确认不含密钥/个人数据，也不是可重新生成或应存放在外部存储的大文件。更多令牌管理说明见 [GitHub 文档](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)。
 
 ## 相关文档
 
